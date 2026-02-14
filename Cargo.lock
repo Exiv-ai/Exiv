@@ -1271,7 +1271,7 @@ dependencies = [
 
 [[package]]
 name = "exiv_core"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "exiv_shared"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3634,7 +3634,7 @@ dependencies = [
 
 [[package]]
 name = "plugin_cerebras"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3647,7 +3647,7 @@ dependencies = [
 
 [[package]]
 name = "plugin_cursor"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3659,7 +3659,7 @@ dependencies = [
 
 [[package]]
 name = "plugin_deepseek"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3674,7 +3674,7 @@ dependencies = [
 
 [[package]]
 name = "plugin_ks22"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3690,7 +3690,7 @@ dependencies = [
 
 [[package]]
 name = "plugin_mcp"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3703,7 +3703,7 @@ dependencies = [
 
 [[package]]
 name = "plugin_moderator"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3732,7 +3732,7 @@ dependencies = [
 
 [[package]]
 name = "plugin_vision"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",

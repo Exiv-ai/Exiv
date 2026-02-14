@@ -7,7 +7,7 @@ use exiv_shared::{
     name = "hal.cursor",
     kind = "HAL",
     description = "High-precision dot cursor with fluid motion trails.",
-    version = "1.6.12",
+    version = "0.1.0",
     category = "Tool",
     permissions = ["InputControl"],
     tags = ["#TOOL"],

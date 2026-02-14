@@ -2,7 +2,7 @@
 
 Exiv (Existence × Virtual) is an AI agent orchestration platform written in Rust. It provides a plugin-based kernel where multiple AI engines, tools, and services communicate through an asynchronous event bus. An admin can control plugin permissions at runtime through a human-in-the-loop approval system.
 
-[![Version](https://img.shields.io/badge/version-0.1.0--alpha.1-blue)]()
+[![Version](https://img.shields.io/badge/version-B1-blue)]()
 [![Tests](https://img.shields.io/badge/tests-78%20passing-brightgreen)]()
 [![License](https://img.shields.io/badge/license-BSL%201.1%20→%20MIT%202028-blue)](LICENSE)
 

@@ -122,6 +122,42 @@
 
 ---
 
+## 3. Versioning
+
+Exiv uses a phase-based versioning scheme with three stages.
+
+### Phases
+
+| Phase | Display | Cargo (Semver) | Git Tag | Status |
+|-------|---------|---------------|---------|--------|
+| Alpha | A1, A2, ... | `0.0.1`, `0.0.2`, ... | `vA1` | Completed (A1–A7) |
+| Beta | B1, B2, ... | `0.1.0`, `0.2.0`, ... | `v0.1.0` | **Current** |
+| Stable | 1.X.Y | `1.X.Y` | `v1.X.Y` | Future |
+
+- **Alpha (A)**: Rapid prototyping. Breaking changes expected on every release.
+- **Beta (B)**: Feature complete. API stabilization and bug fixes. Each beta increments the Cargo minor version.
+- **Stable (1.X.Y)**: Production ready. The leading `1` is fixed unless a major architectural overhaul occurs. `X` = major update, `Y` = minor update / patch.
+
+### System vs Plugin Versions
+
+| Component | Versioning | Source of Truth |
+|-----------|-----------|----------------|
+| System (kernel, SDK, macros) | Unified workspace version | `Cargo.toml` → `workspace.package.version` |
+| Plugins | Independent per plugin | `#[exiv_plugin(version = "...")]` in each plugin's `lib.rs` |
+| Dashboard | Matches system version | `exiv_dashboard/package.json` |
+
+Plugins maintain their own version numbers because they can evolve independently of the kernel. When creating a new plugin, start at `0.1.0`.
+
+### Release Process
+
+1. Bump the version in `Cargo.toml` (workspace) and `exiv_dashboard/package.json`
+2. Commit: `chore: bump version to B2 (0.2.0)`
+3. Tag: `git tag v0.2.0`
+4. Push: `git push origin master --tags`
+5. The GitHub Actions release workflow builds and publishes automatically
+
+---
+
 *Document History:*
 - 2026-02-08: Guardrails 初版作成 (Event Security, Cascading Protection, Lock Aggregation, Storage Consistency)
 - 2026-02-10: UI/UX Clarity, Physical Safety, MCP Resource Control, Privacy & Biometrics 追加
