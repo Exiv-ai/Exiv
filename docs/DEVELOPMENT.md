@@ -131,11 +131,11 @@ Exiv uses a phase-based versioning scheme with three stages.
 | Phase | Display | Cargo (Semver) | Git Tag | Status |
 |-------|---------|---------------|---------|--------|
 | Alpha | A1, A2, ... | `0.0.1`, `0.0.2`, ... | `vA1` | Completed (A1–A7) |
-| Beta | B1, B2, ... | `0.1.0`, `0.2.0`, ... | `v0.1.0` | **Current** |
+| Beta | βX.Y | `0.X.Y` | `v0.X.Y` | **Current (β1 = 0.1.0)** |
 | Stable | 1.X.Y | `1.X.Y` | `v1.X.Y` | Future |
 
 - **Alpha (A)**: Rapid prototyping. Breaking changes expected on every release.
-- **Beta (B)**: Feature complete. API stabilization and bug fixes. Each beta increments the Cargo minor version.
+- **Beta (βX.Y)**: Feature complete, stabilization phase. Follows the same X.Y convention as Stable under the `0.` prefix. `X` = major update, `Y` = minor update / patch. Example: β1 → β1.1 → β1.2 → β2 → β2.1.
 - **Stable (1.X.Y)**: Production ready. The leading `1` is fixed unless a major architectural overhaul occurs. `X` = major update, `Y` = minor update / patch.
 
 ### System vs Plugin Versions
@@ -151,8 +151,8 @@ Plugins maintain their own version numbers because they can evolve independently
 ### Release Process
 
 1. Bump the version in `Cargo.toml` (workspace) and `exiv_dashboard/package.json`
-2. Commit: `chore: bump version to B2 (0.2.0)`
-3. Tag: `git tag v0.2.0`
+2. Commit: `chore: bump version to β1.1 (0.1.1)` or `chore: bump version to β2 (0.2.0)`
+3. Tag: `git tag v0.1.1` or `git tag v0.2.0`
 4. Push: `git push origin master --tags`
 5. The GitHub Actions release workflow builds and publishes automatically
 
