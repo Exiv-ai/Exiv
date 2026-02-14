@@ -3,6 +3,9 @@ VERS_MANIFEST = {
     "name": "Data Analyst Agent",
     "description": "Python-based data analysis agent that can fetch external data.",
     "version": "1.1.0",
+    "category": "Agent",
+    "service_type": "Reasoning",
+    "tags": ["#ANALYST", "#DATA"],
     "capabilities": ["Reasoning"],
     "required_permissions": ["NetworkAccess"]
 }

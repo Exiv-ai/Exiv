@@ -1,4 +1,5 @@
 use crate::managers::{PluginRegistry, PluginManager};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info};
@@ -9,6 +10,9 @@ pub struct EventProcessor {
     plugin_manager: Arc<PluginManager>,
     tx_internal: broadcast::Sender<Arc<VersEvent>>,
     refresh_tx: mpsc::Sender<()>, // 🔄 ルート更新用チャンネル
+    history: Arc<tokio::sync::RwLock<VecDeque<Arc<VersEvent>>>>,
+    metrics: Arc<crate::managers::SystemMetrics>,
+    max_history_size: usize,
 }
 
 impl EventProcessor {
@@ -17,6 +21,9 @@ impl EventProcessor {
         plugin_manager: Arc<PluginManager>,
         tx_internal: broadcast::Sender<Arc<VersEvent>>,
         dynamic_router: Arc<crate::DynamicRouter>,
+        history: Arc<tokio::sync::RwLock<VecDeque<Arc<VersEvent>>>>,
+        metrics: Arc<crate::managers::SystemMetrics>,
+        max_history_size: usize,
     ) -> Self {
         let (refresh_tx, mut refresh_rx) = mpsc::channel(1);
         let registry_clone = registry.clone();
@@ -51,11 +58,48 @@ impl EventProcessor {
             plugin_manager,
             tx_internal,
             refresh_tx,
+            history,
+            metrics,
+            max_history_size,
         }
     }
 
     async fn request_refresh(&self) {
         let _ = self.refresh_tx.try_send(());
+    }
+
+    async fn record_event(&self, event: Arc<VersEvent>) {
+        let mut history = self.history.write().await;
+        history.push_back(event);
+        if history.len() > self.max_history_size {
+            history.pop_front();
+        }
+    }
+
+    pub fn spawn_cleanup_task(self: Arc<Self>) {
+        let processor = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await; // 5 minutes
+                processor.cleanup_old_events().await;
+            }
+        });
+    }
+
+    pub async fn cleanup_old_events(&self) {
+        let cutoff = chrono::Utc::now() - chrono::Duration::hours(24); // 24 hours ago
+        let mut history = self.history.write().await;
+
+        // Remove old events
+        while let Some(oldest) = history.front() {
+            if oldest.timestamp < cutoff {
+                history.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        info!("Event history cleanup: {} events retained", history.len());
     }
 
     pub async fn process_loop(
@@ -69,6 +113,17 @@ impl EventProcessor {
             let event = envelope.event.clone();
             let trace_id = event.trace_id;
             
+            // Record event history
+            self.record_event(event.clone()).await;
+
+            // Increment metrics based on event type
+            match &event.data {
+                vers_shared::VersEventData::MessageReceived(_) => {
+                    self.metrics.total_requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                _ => {}
+            }
+
             // 1. 全プラグイン（および内部システムハンドラ）に配信
             self.registry.dispatch_event(envelope.clone(), &event_tx).await;
 
@@ -76,6 +131,7 @@ impl EventProcessor {
             match &event.data {
                 vers_shared::VersEventData::ThoughtResponse {
                     agent_id,
+                    engine_id: _,
                     content,
                     source_message_id: _,
                 } => {

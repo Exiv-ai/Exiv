@@ -68,7 +68,7 @@ impl Plugin for ModeratorPlugin {
                 return Ok(None);
             }
 
-            VersEventData::ThoughtResponse { agent_id, content, source_message_id: _ } => {
+            VersEventData::ThoughtResponse { agent_id, engine_id: _, content, source_message_id: _ } => {
                 // 自分自身(Moderator)や、統合エンジン(Synthesizer)からの回答を区別する必要がある
                 if agent_id == "system.consensus" {
                     return Ok(None);
@@ -118,6 +118,7 @@ impl Plugin for ModeratorPlugin {
                                 event.trace_id,
                                 VersEventData::ThoughtResponse {
                                     agent_id: "system.consensus".to_string(),
+                                    engine_id: "core.moderator".to_string(),
                                     content: content.clone(),
                                     source_message_id: "consensus".to_string(),
                                 }

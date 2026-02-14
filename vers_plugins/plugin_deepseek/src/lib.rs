@@ -88,6 +88,7 @@ impl Plugin for DeepSeekPlugin {
                 let content = self.think(agent, message, context.clone()).await?;
                 return Ok(Some(vers_shared::VersEventData::ThoughtResponse {
                     agent_id: agent.id.clone(),
+                    engine_id: Self::PLUGIN_ID.to_string(),
                     content,
                     source_message_id: message.id.clone(),
                 }));

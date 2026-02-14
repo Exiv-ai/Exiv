@@ -5,6 +5,10 @@ pub mod handlers;
 pub mod managers;
 pub mod capabilities;
 pub mod middleware;
+pub mod cli;
+pub mod installer;
+pub mod platform;
+pub mod validation;
 
 // Re-export audit log and permission request types for external use
 pub use db::{
@@ -36,7 +40,7 @@ use vers_shared::VersEvent;
 use sqlx::SqlitePool;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, Notify, RwLock};
 
 #[derive(Debug, Clone)]
 pub struct EnvelopedEvent {
@@ -44,6 +48,18 @@ pub struct EnvelopedEvent {
     pub issuer: Option<vers_shared::VersId>, // None = System/Kernel
     pub correlation_id: Option<vers_shared::VersId>, // 親イベントの trace_id
     pub depth: u8,
+}
+
+impl EnvelopedEvent {
+    /// Create a system-originated event (no issuer, no correlation, depth 0)
+    pub fn system(data: vers_shared::VersEventData) -> Self {
+        Self {
+            event: Arc::new(VersEvent::new(data)),
+            issuer: None,
+            correlation_id: None,
+            depth: 0,
+        }
+    }
 }
 
 pub struct DynamicRouter {
@@ -62,6 +78,7 @@ pub struct AppState {
     pub event_history: Arc<RwLock<VecDeque<Arc<VersEvent>>>>,
     pub metrics: Arc<managers::SystemMetrics>,
     pub rate_limiter: Arc<middleware::RateLimiter>,
+    pub shutdown: Arc<Notify>,
 }
 
 pub enum AppError {
@@ -132,6 +149,23 @@ pub async fn run_kernel() -> anyhow::Result<()> {
         config.database_url, config.default_agent_id
     );
 
+    // Principle #5: Warn if admin API key is missing in release builds
+    if config.admin_api_key.is_none() && !cfg!(debug_assertions) {
+        tracing::warn!("⚠️  VERS_API_KEY is not set. All admin endpoints will reject requests.");
+        tracing::warn!("    Set VERS_API_KEY in .env or environment to enable admin operations.");
+    }
+
+    // 0. Ensure parent directory of DB file exists (for deployed layout)
+    if let Some(path_str) = config.database_url.strip_prefix("sqlite:") {
+        let db_path = std::path::Path::new(path_str);
+        if let Some(parent) = db_path.parent() {
+            if !parent.as_os_str().is_empty() && parent != std::path::Path::new(".") {
+                std::fs::create_dir_all(parent)?;
+                info!("📁 Data directory: {}", parent.display());
+            }
+        }
+    }
+
     // 1. データベースの初期化
     use sqlx::sqlite::SqliteConnectOptions;
     use std::str::FromStr;
@@ -197,6 +231,7 @@ pub async fn run_kernel() -> anyhow::Result<()> {
 
     // 5. Rate Limiter & App State
     let rate_limiter = Arc::new(middleware::RateLimiter::new(10, 20));
+    let shutdown = Arc::new(Notify::new());
 
     let app_state = Arc::new(AppState {
         tx: tx.clone(),
@@ -209,22 +244,37 @@ pub async fn run_kernel() -> anyhow::Result<()> {
         config: config.clone(),
         event_history: event_history.clone(),
         metrics: metrics.clone(),
-        rate_limiter,
+        rate_limiter: rate_limiter.clone(),
+        shutdown,
     });
 
     // 6. Event Loop
-    let processor = EventProcessor::new(
+    let processor = Arc::new(EventProcessor::new(
         registry_arc.clone(),
         plugin_manager.clone(),
         tx.clone(),
         dynamic_router.clone(),
         event_history,
         metrics,
-    );
+        config.event_history_size,
+    ));
+
+    // Start event history cleanup task
+    processor.clone().spawn_cleanup_task();
 
     let event_tx_clone = event_tx.clone();
+    let processor_clone = processor.clone();
     tokio::spawn(async move {
-        processor.process_loop(event_rx, event_tx_clone).await;
+        processor_clone.process_loop(event_rx, event_tx_clone).await;
+    });
+
+    // 6b. Rate limiter cleanup task (every 10 minutes)
+    let rl = rate_limiter.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+            rl.cleanup();
+        }
     });
 
     // 7. Web Server
@@ -232,11 +282,16 @@ pub async fn run_kernel() -> anyhow::Result<()> {
     // Admin endpoints: rate-limited (10 req/s, burst 20)
     let admin_routes = Router::new()
         .route("/system/shutdown", post(handlers::shutdown_handler))
+        .route("/system/update/check", get(handlers::update::check_handler))
+        .route("/system/update/apply", post(handlers::update::apply_handler))
         .route("/plugins/apply", post(handlers::apply_plugin_settings))
         .route("/plugins/:id/config", post(handlers::update_plugin_config))
         .route("/plugins/:id/permissions/grant", post(handlers::grant_permission_handler))
         .route("/agents", post(handlers::create_agent))
         .route("/agents/:id", post(handlers::update_agent))
+        .route("/events/publish", post(handlers::post_event_handler))
+        .route("/permissions/:id/approve", post(handlers::approve_permission))
+        .route("/permissions/:id/deny", post(handlers::deny_permission))
         .layer(axum::middleware::from_fn_with_state(
             app_state.clone(),
             middleware::rate_limit_middleware,
@@ -244,8 +299,8 @@ pub async fn run_kernel() -> anyhow::Result<()> {
 
     // Public/read endpoints (no rate limiting)
     let api_routes = Router::new()
+        .route("/system/version", get(handlers::update::version_handler))
         .route("/events", get(handlers::sse_handler))
-        .route("/events/publish", post(handlers::post_event_handler))
         .route("/history", get(handlers::get_history))
         .route("/metrics", get(handlers::get_metrics))
         .route("/memories", get(handlers::get_memories))
@@ -254,9 +309,8 @@ pub async fn run_kernel() -> anyhow::Result<()> {
         .route("/plugins/:id/config", get(handlers::get_plugin_config))
         .route("/agents", get(handlers::get_agents))
         .route("/permissions/pending", get(handlers::get_pending_permissions))
-        .route("/permissions/:id/approve", post(handlers::approve_permission))
-        .route("/permissions/:id/deny", post(handlers::deny_permission))
-        .merge(admin_routes);
+        .merge(admin_routes)
+        .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024));
 
     let app = Router::new()
         .nest("/api", api_routes.with_state(app_state.clone()))
@@ -276,7 +330,13 @@ pub async fn run_kernel() -> anyhow::Result<()> {
         config.port
     );
 
-    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
+    let shutdown_signal = app_state.shutdown.clone();
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+        .with_graceful_shutdown(async move {
+            shutdown_signal.notified().await;
+            info!("🛑 Graceful shutdown signal received. Stopping server...");
+        })
+        .await?;
     Ok(())
 }
 

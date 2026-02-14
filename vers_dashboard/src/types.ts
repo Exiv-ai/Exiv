@@ -81,3 +81,13 @@ export interface DetectedElement {
   bounds: [number, number, number, number];
   confidence: number;
 }
+
+export interface GazeData {
+  x: number;
+  y: number;
+  confidence: number;
+  fixated: boolean;
+}
+
+export type TrackerStatus = 'loading' | 'requesting' | 'active' | 'denied' | 'error' | 'stopped';
+export type DelegateMode = 'gpu' | 'cpu' | 'cpu-fallback';

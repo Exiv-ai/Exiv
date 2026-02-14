@@ -13,7 +13,6 @@
 .eslintcache
 .idea/
 .vscode/
-Cargo.lock
 compiled-tailwind.css
 dist/
 node_modules/

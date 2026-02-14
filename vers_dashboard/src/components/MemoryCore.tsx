@@ -5,6 +5,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { LockScreen } from './LockScreen';
 import { SystemHistory } from './SystemHistory';
 import { useEventStream } from '../hooks/useEventStream';
+import { API_BASE } from '../services/api';
 
 interface Memory {
   user_id: string;
@@ -36,9 +37,9 @@ export const MemoryCore = memo(function MemoryCore({ isWindowMode = false, onClo
     try {
       const headers: Record<string, string> = {};
       const [memRes, epiRes, metRes] = await Promise.all([
-        fetch(`/api/memories`, { headers }),
-        fetch(`/api/episodes`, { headers }),
-        fetch(`/api/metrics`, { headers })
+        fetch(`${API_BASE}/memories`, { headers }),
+        fetch(`${API_BASE}/episodes`, { headers }),
+        fetch(`${API_BASE}/metrics`, { headers })
       ]);
 
       if (memRes.ok) setMemories(await memRes.json());
@@ -55,7 +56,7 @@ export const MemoryCore = memo(function MemoryCore({ isWindowMode = false, onClo
     }
   }, [isLocked]);
 
-  useEventStream('/api/events', (data) => {
+  useEventStream(`${API_BASE}/events`, (data) => {
     if (data.type === 'MessageReceived' || data.type === 'VisionUpdated' || data.type === 'SystemNotification') {
        // On relevant events, refresh the data
        // Ideally we would append the new message/memory directly, but for now we re-fetch to ensure consistency

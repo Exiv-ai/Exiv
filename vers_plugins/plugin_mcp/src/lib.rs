@@ -35,7 +35,7 @@ struct McpState {
 }
 
 struct McpServerInstance {
-    name: String,
+    _name: String,
     command: String,
     args: Vec<String>,
     client: Option<Arc<McpClient>>, 
@@ -58,7 +58,7 @@ impl McpAdapterPlugin {
                 Ok(configs) => {
                     for cfg in configs {
                         servers.insert(cfg.name.clone(), McpServerInstance {
-                            name: cfg.name,
+                            _name: cfg.name,
                             command: cfg.command,
                             args: cfg.args,
                             client: None,

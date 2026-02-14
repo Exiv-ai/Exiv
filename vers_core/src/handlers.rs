@@ -1,5 +1,6 @@
 pub mod system;
 pub mod assets;
+pub mod update;
 
 use axum::{
     extract::{Path, State},
@@ -11,17 +12,22 @@ use futures::stream::Stream;
 use serde::Deserialize;
 use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 use tracing::{info, error};
-use vers_shared::{VersEvent, VersMessage};
+use vers_shared::VersMessage;
 
 use crate::{AppState, AppResult, AppError};
 
 fn check_auth(state: &AppState, headers: &HeaderMap) -> AppResult<()> {
+    use subtle::ConstantTimeEq;
     match state.config.admin_api_key {
         Some(ref required_key) => {
             let auth_header = headers.get("X-API-Key")
                 .and_then(|h| h.to_str().ok());
 
-            if auth_header != Some(required_key) {
+            let matches: bool = match auth_header {
+                Some(provided) => provided.as_bytes().ct_eq(required_key.as_bytes()).into(),
+                None => false,
+            };
+            if !matches {
                 return Err(AppError::Vers(vers_shared::VersError::PermissionDenied(
                     vers_shared::Permission::AdminAccess
                 )));
@@ -139,20 +145,15 @@ pub async fn update_plugin_config(
 
     // Get latest settings and notify
     if let Ok(full_config) = state.plugin_manager.get_config(&id).await {
-        let event = Arc::new(VersEvent::new(vers_shared::VersEventData::ConfigUpdated {
+        let envelope = crate::EnvelopedEvent::system(vers_shared::VersEventData::ConfigUpdated {
             plugin_id: id.clone(),
             config: full_config,
-        }));
-        let envelope = crate::EnvelopedEvent {
-            event: event.clone(),
-            issuer: None,
-            correlation_id: None,
-            depth: 0,
-        };
+        });
+        let event = envelope.event.clone();
         let _ = state.event_tx.send(envelope).await;
 
         // 監査ログに記録
-        let audit_entry = crate::db::AuditLogEntry {
+        crate::db::spawn_audit_log(state.pool.clone(), crate::db::AuditLogEntry {
             timestamp: chrono::Utc::now(),
             event_type: "CONFIG_UPDATED".to_string(),
             actor_id: Some("admin".to_string()),
@@ -165,13 +166,6 @@ pub async fn update_plugin_config(
                 "value": payload.value
             })),
             trace_id: Some(event.trace_id.to_string()),
-        };
-
-        let pool = state.pool.clone();
-        tokio::spawn(async move {
-            if let Err(e) = crate::db::write_audit_log(&pool, audit_entry).await {
-                error!("Failed to write audit log: {}", e);
-            }
         });
     }
 
@@ -218,36 +212,24 @@ pub async fn grant_permission_handler(
     state.plugin_manager.grant_permission(&id, payload.permission.clone()).await?;
 
     // イベントループに通知して Capability を注入させる
-    let event = Arc::new(VersEvent::new(vers_shared::VersEventData::PermissionGranted {
+    let envelope = crate::EnvelopedEvent::system(vers_shared::VersEventData::PermissionGranted {
         plugin_id: id.clone(),
         permission: payload.permission.clone(),
-    }));
-    let envelope = crate::EnvelopedEvent {
-        event: event.clone(),
-        issuer: None,
-        correlation_id: None,
-        depth: 0,
-    };
+    });
+    let event = envelope.event.clone();
     let _ = state.event_tx.send(envelope).await;
 
     // 監査ログに記録
-    let audit_entry = crate::db::AuditLogEntry {
+    crate::db::spawn_audit_log(state.pool.clone(), crate::db::AuditLogEntry {
         timestamp: chrono::Utc::now(),
         event_type: "PERMISSION_GRANTED".to_string(),
-        actor_id: Some("admin".to_string()), // API key経由の管理者
+        actor_id: Some("admin".to_string()),
         target_id: Some(id.clone()),
         permission: Some(format!("{:?}", payload.permission)),
         result: "SUCCESS".to_string(),
         reason: "Administrator approved permission request".to_string(),
         metadata: None,
         trace_id: Some(event.trace_id.to_string()),
-    };
-
-    let pool = state.pool.clone();
-    tokio::spawn(async move {
-        if let Err(e) = crate::db::write_audit_log(&pool, audit_entry).await {
-            error!("Failed to write audit log: {}", e);
-        }
     });
 
     Ok(Json(serde_json::json!({ "status": "success" })))
@@ -263,30 +245,26 @@ pub async fn shutdown_handler(
     info!("🛑 Shutdown requested. Broadcasting notification...");
 
     // Send system notification
-    let event = Arc::new(VersEvent::new(vers_shared::VersEventData::SystemNotification(
+    let envelope = crate::EnvelopedEvent::system(vers_shared::VersEventData::SystemNotification(
         "Kernel is shutting down for maintenance...".to_string()
-    )));
-    let envelope = crate::EnvelopedEvent {
-        event,
-        issuer: None,
-        correlation_id: None,
-        depth: 0,
-    };
+    ));
     let _ = state.event_tx.send(envelope).await;
 
-    // Execute shutdown asynchronously (exit immediately after returning response)
+    // Execute shutdown asynchronously (after returning response)
+    let shutdown = state.shutdown.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        // 🚧 Signal to guardian (entering maintenance mode)
-        if let Err(e) = std::fs::write(".maintenance", "active") {
+        // 🚧 Signal maintenance mode (exe directory for deployed layout)
+        let maint = crate::config::exe_dir().join(".maintenance");
+        if let Err(e) = std::fs::write(&maint, "active") {
             error!("❌ Failed to create .maintenance file: {}", e);
         } else {
             info!("🚧 Maintenance mode engaged.");
         }
 
-        info!("👋 Kernel exiting normally (Code 0).");
-        std::process::exit(0);
+        info!("👋 Kernel shutting down gracefully.");
+        shutdown.notify_one();
     });
 
     Ok(Json(serde_json::json!({ "status": "shutting_down" })))
@@ -295,8 +273,10 @@ pub async fn shutdown_handler(
 /// 外部（フロントエンド等）からイベントをバスに注入するハンドラ
 pub async fn post_event_handler(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(event_data): Json<vers_shared::VersEventData>,
 ) -> AppResult<Json<serde_json::Value>> {
+    check_auth(&state, &headers)?;
     // 🛡️ Security Check: 外部からの重要なシステムイベントの注入を禁止
     match &event_data {
         vers_shared::VersEventData::MessageReceived(_) |
@@ -311,13 +291,7 @@ pub async fn post_event_handler(
         }
     }
 
-    let event = Arc::new(VersEvent::new(event_data));
-    let envelope = crate::EnvelopedEvent {
-        event,
-        issuer: None,
-        correlation_id: None,
-        depth: 0,
-    };
+    let envelope = crate::EnvelopedEvent::system(event_data);
     state.event_tx.send(envelope).await
         .map_err(|e| anyhow::anyhow!(e))?;
     Ok(Json(serde_json::json!({ "status": "published" })))
@@ -328,13 +302,7 @@ pub async fn chat_handler(
     State(state): State<Arc<AppState>>,
     Json(msg): Json<VersMessage>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let event = Arc::new(VersEvent::new(vers_shared::VersEventData::MessageReceived(msg)));
-    let envelope = crate::EnvelopedEvent {
-        event,
-        issuer: None,
-        correlation_id: None,
-        depth: 0,
-    };
+    let envelope = crate::EnvelopedEvent::system(vers_shared::VersEventData::MessageReceived(msg));
     state.event_tx.send(envelope).await
         .map_err(|e| anyhow::anyhow!(e))?;
     Ok(Json(serde_json::json!({ "status": "accepted" })))
@@ -380,11 +348,19 @@ pub async fn get_history(State(state): State<Arc<AppState>>) -> AppResult<Json<s
 
 /// システムメトリクスを取得
 pub async fn get_metrics(State(state): State<Arc<AppState>>) -> AppResult<Json<serde_json::Value>> {
+    let history_len = state.event_history.read().await.len();
+    let max_size = state.config.event_history_size;
+
     Ok(Json(serde_json::json!({
         "total_requests": state.metrics.total_requests.load(std::sync::atomic::Ordering::Relaxed),
         "total_memories": state.metrics.total_memories.load(std::sync::atomic::Ordering::Relaxed),
         "total_episodes": state.metrics.total_episodes.load(std::sync::atomic::Ordering::Relaxed),
         "ram_usage": "Unknown", // Future implementation
+        "event_history": {
+            "current_size": history_len,
+            "max_size": max_size,
+            "memory_estimate_bytes": history_len * std::mem::size_of::<std::sync::Arc<vers_shared::VersEvent>>(),
+        }
     })))
 }
 
@@ -419,13 +395,15 @@ pub struct PermissionDecisionPayload {
 
 pub async fn approve_permission(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     axum::extract::Path(request_id): axum::extract::Path<String>,
     Json(payload): Json<PermissionDecisionPayload>,
 ) -> AppResult<Json<serde_json::Value>> {
+    check_auth(&state, &headers)?;
     crate::update_permission_request(&state.pool, &request_id, "approved", &payload.approved_by).await?;
 
     // Write audit log
-    let audit_entry = crate::AuditLogEntry {
+    crate::db::spawn_audit_log(state.pool.clone(), crate::AuditLogEntry {
         timestamp: chrono::Utc::now(),
         event_type: "PERMISSION_REQUEST_APPROVED".to_string(),
         actor_id: Some(payload.approved_by.clone()),
@@ -435,13 +413,6 @@ pub async fn approve_permission(
         reason: "Human administrator approved permission request".to_string(),
         metadata: None,
         trace_id: None,
-    };
-
-    let pool = state.pool.clone();
-    tokio::spawn(async move {
-        if let Err(e) = crate::write_audit_log(&pool, audit_entry).await {
-            tracing::error!("Failed to write audit log: {}", e);
-        }
     });
 
     Ok(Json(serde_json::json!({
@@ -453,13 +424,15 @@ pub async fn approve_permission(
 /// Deny a permission request
 pub async fn deny_permission(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     axum::extract::Path(request_id): axum::extract::Path<String>,
     Json(payload): Json<PermissionDecisionPayload>,
 ) -> AppResult<Json<serde_json::Value>> {
+    check_auth(&state, &headers)?;
     crate::update_permission_request(&state.pool, &request_id, "denied", &payload.approved_by).await?;
 
     // Write audit log
-    let audit_entry = crate::AuditLogEntry {
+    crate::db::spawn_audit_log(state.pool.clone(), crate::AuditLogEntry {
         timestamp: chrono::Utc::now(),
         event_type: "PERMISSION_REQUEST_DENIED".to_string(),
         actor_id: Some(payload.approved_by.clone()),
@@ -469,13 +442,6 @@ pub async fn deny_permission(
         reason: "Human administrator denied permission request".to_string(),
         metadata: None,
         trace_id: None,
-    };
-
-    let pool = state.pool.clone();
-    tokio::spawn(async move {
-        if let Err(e) = crate::write_audit_log(&pool, audit_entry).await {
-            tracing::error!("Failed to write audit log: {}", e);
-        }
     });
 
     Ok(Json(serde_json::json!({
@@ -492,7 +458,7 @@ mod tests {
     use crate::managers::{PluginRegistry, AgentManager, PluginManager, SystemMetrics};
     use crate::DynamicRouter;
     use std::collections::VecDeque;
-    use tokio::sync::{broadcast, mpsc, RwLock};
+    use tokio::sync::{broadcast, mpsc, Notify, RwLock};
     use sqlx::SqlitePool;
 
     async fn create_test_app_state(admin_api_key: Option<String>) -> Arc<AppState> {
@@ -535,6 +501,7 @@ mod tests {
             event_history,
             metrics,
             rate_limiter,
+            shutdown: Arc::new(Notify::new()),
         })
     }
 

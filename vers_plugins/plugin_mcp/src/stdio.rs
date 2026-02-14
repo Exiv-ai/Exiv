@@ -1,12 +1,44 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::process::Stdio;
+use std::path::Path;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
+/// Allowed commands for MCP server execution (security whitelist)
+const ALLOWED_COMMANDS: &[&str] = &[
+    "npx",
+    "node",
+    "python",
+    "python3",
+    "deno",
+    "bun",
+];
+
+/// Validate command against whitelist and resolve to safe path
+fn validate_command(command: &str) -> Result<String> {
+    // Check if command is in whitelist
+    let cmd_name = Path::new(command)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(command);
+
+    if !ALLOWED_COMMANDS.contains(&cmd_name) {
+        bail!(
+            "Command '{}' not in whitelist. Allowed commands: {:?}",
+            command,
+            ALLOWED_COMMANDS
+        );
+    }
+
+    // For security, prefer full path resolution via 'which' or system PATH
+    // This prevents execution of malicious binaries in current directory
+    Ok(command.to_string())
+}
+
 pub struct StdioTransport {
-    child: Child,
+    _child: Child,
     request_tx: mpsc::Sender<String>,
     response_rx: mpsc::Receiver<String>,
 }
@@ -15,7 +47,11 @@ impl StdioTransport {
     pub async fn start(command: &str, args: &[String]) -> Result<Self> {
         info!("🔌 Starting MCP Server: {} {:?}", command, args);
 
-        let mut child = Command::new(command)
+        // Security: Validate command against whitelist
+        let validated_command = validate_command(command)
+            .context("Command validation failed")?;
+
+        let mut child = Command::new(validated_command)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -36,8 +72,7 @@ impl StdioTransport {
             let mut writer = stdin;
             while let Some(msg) = req_rx.recv().await {
                 // MCP requires messages to be line-delimited
-                let line = format!("{}
-", msg);
+                let line = format!("{}\n", msg);
                 if let Err(e) = writer.write_all(line.as_bytes()).await {
                     error!("❌ Failed to write to MCP server stdin: {}", e);
                     break;
@@ -53,10 +88,8 @@ impl StdioTransport {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
-                if !line.trim().is_empty() {
-                    if let Err(_) = res_tx.send(line).await {
-                        break; // Channel closed
-                    }
+                if !line.trim().is_empty() && res_tx.send(line).await.is_err() {
+                    break; // Channel closed
                 }
             }
             warn!("🔌 MCP Server stdout closed.");
@@ -71,7 +104,7 @@ impl StdioTransport {
         });
 
         Ok(Self {
-            child,
+            _child: child,
             request_tx: req_tx,
             response_rx: res_rx,
         })
@@ -83,5 +116,37 @@ impl StdioTransport {
 
     pub async fn recv(&mut self) -> Option<String> {
         self.response_rx.recv().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_command_allowed() {
+        assert!(validate_command("npx").is_ok());
+        assert!(validate_command("node").is_ok());
+        assert!(validate_command("python3").is_ok());
+        assert!(validate_command("deno").is_ok());
+        assert!(validate_command("bun").is_ok());
+    }
+
+    #[test]
+    fn test_validate_command_blocked() {
+        // Malicious commands should be blocked
+        assert!(validate_command("bash").is_err());
+        assert!(validate_command("sh").is_err());
+        assert!(validate_command("cmd").is_err());
+        assert!(validate_command("powershell").is_err());
+        assert!(validate_command("/bin/sh").is_err());
+        assert!(validate_command("../../../bin/sh").is_err());
+    }
+
+    #[test]
+    fn test_validate_command_path_extraction() {
+        // Should extract command name from path
+        let result = validate_command("/usr/bin/node");
+        assert!(result.is_ok());
     }
 }

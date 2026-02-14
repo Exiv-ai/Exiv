@@ -103,17 +103,9 @@ pub async fn init_db(pool: &SqlitePool, database_url: &str) -> anyhow::Result<()
         .bind(database_url)
         .execute(pool).await?;
 
-    // Inject API keys from environment variables if set (never hardcode secrets)
-    if let Ok(key) = std::env::var("DEEPSEEK_API_KEY") {
-        sqlx::query("INSERT OR IGNORE INTO plugin_configs (plugin_id, config_key, config_value) VALUES ('mind.deepseek', 'api_key', ?)")
-            .bind(&key)
-            .execute(pool).await?;
-    }
-    if let Ok(key) = std::env::var("CEREBRAS_API_KEY") {
-        sqlx::query("INSERT OR IGNORE INTO plugin_configs (plugin_id, config_key, config_value) VALUES ('mind.cerebras', 'api_key', ?)")
-            .bind(&key)
-            .execute(pool).await?;
-    }
+    // API keys are NOT persisted to the database for security.
+    // Plugins receive API keys at runtime via environment variables
+    // through the config injection in PluginManager::initialize_all().
 
     Ok(())
 }
@@ -154,6 +146,16 @@ pub async fn write_audit_log(pool: &SqlitePool, entry: AuditLogEntry) -> anyhow:
     .await?;
 
     Ok(())
+}
+
+/// Spawn a background task to write an audit log entry (fire-and-forget).
+/// Logs errors but does not propagate them.
+pub fn spawn_audit_log(pool: SqlitePool, entry: AuditLogEntry) {
+    tokio::spawn(async move {
+        if let Err(e) = write_audit_log(&pool, entry).await {
+            tracing::error!("Failed to write audit log: {}", e);
+        }
+    });
 }
 
 /// Query audit logs from the database (most recent first)

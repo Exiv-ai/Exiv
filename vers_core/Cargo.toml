@@ -3,6 +3,10 @@ name = "vers_core"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "vers_system"
+path = "src/main.rs"
+
 [dependencies]
 vers_shared = { path = "../vers_shared" }
 plugin_ks22 = { path = "../vers_plugins/plugin_ks22" }
@@ -24,7 +28,7 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "sqlite", "
 async-trait.workspace = true
 axum.workspace = true
 tower = { version = "0.4", features = ["util"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest.workspace = true
 tower-http.workspace = true
 futures.workspace = true
 tokio-stream.workspace = true
@@ -33,7 +37,34 @@ rust-embed = "8.5"
 mime_guess = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
 governor = "0.6"
-dashmap = "6.1"
+dashmap.workspace = true
+sha2 = "0.10"
+clap = { version = "4", features = ["derive"] }
+rand = "0.8"
+subtle = "2"
+validator = { version = "0.16", features = ["derive"] }
 
 [dev-dependencies]
 http = "1.0"
+criterion = { workspace = true }
+tokio-test = "0.4"
+
+[[bench]]
+name = "event_processing"
+harness = false
+
+[[bench]]
+name = "database_operations"
+harness = false
+
+[[bench]]
+name = "security_operations"
+harness = false
+
+[[bench]]
+name = "plugin_dispatch"
+harness = false
+
+[[bench]]
+name = "rate_limiting"
+harness = false

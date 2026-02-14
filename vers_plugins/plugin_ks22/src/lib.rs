@@ -46,6 +46,21 @@ impl Plugin for Ks22Plugin {
         state.store = Some(context.store);
         Ok(())
     }
+
+    async fn on_event(&self, event: &vers_shared::VersEvent) -> anyhow::Result<Option<vers_shared::VersEventData>> {
+        if let vers_shared::VersEventData::ThoughtRequested { agent, engine_id, message, context } = &event.data {
+            if engine_id == "core.ks22" {
+                let content = self.think(agent, message, context.clone()).await?;
+                return Ok(Some(vers_shared::VersEventData::ThoughtResponse {
+                    agent_id: agent.id.clone(),
+                    engine_id: "core.ks22".to_string(),
+                    content,
+                    source_message_id: message.id.clone(),
+                }));
+            }
+        }
+        Ok(None)
+    }
 }
 
 #[async_trait]

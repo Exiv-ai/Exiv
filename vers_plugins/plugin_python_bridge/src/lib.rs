@@ -12,6 +12,19 @@ use vers_shared::{
 };
 use tracing::info;
 
+/// Resolve a script path: try exe-relative first (deployed), fall back to CWD (development).
+fn resolve_script_path(relative: &str) -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join(relative);
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+    std::path::PathBuf::from(relative)
+}
+
 #[vers_plugin(
     name = "bridge.python",
     kind = "Reasoning",
@@ -127,11 +140,14 @@ impl PythonBridgePlugin {
             state.last_restart = Some(std::time::Instant::now());
 
             let event_tx = state.event_tx.clone();
-            info!("🐍 Spawning Python subprocess: scripts/bridge_runtime.py with user script: {}", self.script_path);
-            
-            let mut child = Command::new("python3")
-                .arg("scripts/bridge_runtime.py")
-                .arg(&self.script_path)
+            let runtime_path = resolve_script_path("scripts/bridge_runtime.py");
+            let user_script_path = resolve_script_path(&self.script_path);
+            info!("🐍 Spawning Python subprocess: {} with user script: {}", runtime_path.display(), user_script_path.display());
+
+            let python = if cfg!(windows) { "python" } else { "python3" };
+            let mut child = Command::new(python)
+                .arg(&runtime_path)
+                .arg(&user_script_path)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
@@ -403,13 +419,20 @@ impl vers_shared::WebPlugin for PythonBridgePlugin {
         router.route(
             &format!("/api/plugin/{}/action/:command", instance_id),
             axum::routing::post(move |
-                axum::extract::Path(command): axum::extract::Path<String>,
+                uri: axum::http::Uri,
                 body: Option<axum::Json<serde_json::Value>>
             | {
                 let plugin = plugin.clone();
-                let _body_val = body.map(|b| b.0).unwrap_or(serde_json::Value::Null);
+                let body_val = body.map(|b| b.0).unwrap_or(serde_json::Value::Null);
                 async move {
-                    match plugin.call_python(&format!("on_action_{}", command), serde_json::Value::Null).await {
+                    // Extract command from URI to avoid Path extractor conflict
+                    // with outer router's wildcard parameter
+                    let command = uri.path()
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or("unknown")
+                        .to_string();
+                    match plugin.call_python(&format!("on_action_{}", command), body_val).await {
                         Ok(res) => axum::Json(res),
                         Err(e) => {
                             tracing::error!("❌ Python Bridge Action Error: {}", e);

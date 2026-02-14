@@ -18,7 +18,7 @@ export const GlassWindow = memo(function GlassWindow({ title, initialPosition, c
   const isDragging = useRef(false);
   const dragOffset = useRef({ x: 0, y: 0 });
 
-  const handleMouseDown = (e: MouseEvent) => {
+  const handleMouseDown = (e: React.MouseEvent) => {
     isDragging.current = true;
     dragOffset.current = {
       x: e.clientX - position.x,
@@ -32,7 +32,7 @@ export const GlassWindow = memo(function GlassWindow({ title, initialPosition, c
       windowRef.current.style.transition = 'none'; // Disable transitions during drag
     }
     
-    onFocus();
+    if (onFocus) onFocus();
   };
 
   useEffect(() => {
@@ -68,18 +68,7 @@ export const GlassWindow = memo(function GlassWindow({ title, initialPosition, c
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [position]); // Add position dependency to ensure offset calc is correct? 
-  // actually dragOffset is ref, it's fine. 
-  // But handleMouseUp uses dragOffset.
-  // The dependency array was [] before. 
-  // If I access `dragOffset.current`, it's fine.
-  // `setPosition` is stable.
-  // Wait, `handleMouseDown` relies on `position`. 
-  // `handleMouseDown` is attached to the div via prop, so it closes over `position`.
-  // If `GlassWindow` re-renders (due to setPosition on drop), `handleMouseDown` is re-created with new `position`.
-  // So `useEffect` with `[]` is fine because `handleMouseMove` uses refs.
-  // BUT `handleMouseUp` uses `setPosition`? Yes.
-  // `useEffect` doesn't use `position` directly inside event listeners (except via refs or setPosition which handles value).
+  }, []); // Use empty dependency array as we use refs for tracking state in listeners
   
   return (
     <div 

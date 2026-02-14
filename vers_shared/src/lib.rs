@@ -4,8 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::pin::Pin;
-use std::future::Future;
 use uuid::Uuid;
 
 pub use vers_macros::vers_plugin;
@@ -19,6 +17,12 @@ pub struct VersId(Uuid);
 impl std::fmt::Display for VersId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl Default for VersId {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -79,6 +83,14 @@ impl std::fmt::Display for Permission {
 pub enum VersError {
     #[error("Permission denied: {0}")]
     PermissionDenied(Permission),
+    #[error("Plugin error: {id} - {message}")]
+    PluginError { id: String, message: String },
+    #[error("Network error: {0}")]
+    NetworkError(String),
+    #[error("Timeout occurred: {0}")]
+    Timeout(String),
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
     #[error("Plugin not found: {0}")]
     PluginNotFound(String),
     #[error("Agent not found: {0}")]
@@ -96,6 +108,7 @@ pub type VersResult<T> = std::result::Result<T, VersError>;
 pub struct PluginRuntimeContext {
     pub effective_permissions: Vec<Permission>,
     pub store: Arc<dyn PluginDataStore>,
+    pub event_tx: tokio::sync::mpsc::Sender<VersEventData>,
 }
 
 /// プラグインがデータを保存するための抽象ストレージインターフェース (Principle #4: Data Sovereignty / Principle #6: SAL)
@@ -302,19 +315,6 @@ pub trait Plugin: Any + Send + Sync + PluginCast {
     }
 }
 
-pub enum HttpMethod {
-    Get,
-    Post,
-    Put,
-    Delete,
-}
-
-pub struct WebRoute {
-    pub path: String,
-    pub method: HttpMethod,
-    pub handler: Arc<dyn Fn(serde_json::Value) -> Pin<Box<dyn Future<Output = serde_json::Value> + Send>> + Send + Sync>,
-}
-
 pub trait WebPlugin: Plugin {
     fn register_routes(&self, router: axum::Router<Arc<dyn Any + Send + Sync>>) -> axum::Router<Arc<dyn Any + Send + Sync>>;
 }
@@ -360,44 +360,20 @@ pub trait MemoryProvider: Plugin {
     ) -> anyhow::Result<Vec<VersMessage>>;
 }
 
-#[async_trait]
-pub trait EventHandler: Send + Sync {
-    async fn handle(&self, event: &VersEvent) -> anyhow::Result<Option<VersEventData>>;
-}
-
-pub struct EventRouter {
-    pub handlers: HashMap<String, Box<dyn EventHandler>>,
-}
-
-impl EventRouter {
-    pub fn new() -> Self {
-        Self { handlers: HashMap::new() }
-    }
-
-    pub fn on<F, Fut>(&mut self, event_type: &str, handler: F)
-    where
-        F: Fn(VersEvent) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = anyhow::Result<Option<VersEventData>>> + Send + 'static,
-    {
-        struct FuncHandler<F>(F);
-        #[async_trait]
-        impl<F, Fut> EventHandler for FuncHandler<F>
-        where
-            F: Fn(VersEvent) -> Fut + Send + Sync + 'static,
-            Fut: std::future::Future<Output = anyhow::Result<Option<VersEventData>>> + Send + 'static,
-        {
-            async fn handle(&self, event: &VersEvent) -> anyhow::Result<Option<VersEventData>> {
-                (self.0)(event.clone()).await
-            }
-        }
-        self.handlers.insert(event_type.to_string(), Box::new(FuncHandler(handler)));
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersEvent {
     pub trace_id: VersId,
+    pub timestamp: DateTime<Utc>,
+    #[serde(flatten)]
     pub data: VersEventData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GazeData {
+    pub x: i32,
+    pub y: i32,
+    pub confidence: f32,
+    pub fixated: bool, // 一定時間留まっているか
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -405,6 +381,8 @@ pub struct VersEvent {
 pub enum VersEventData {
     MessageReceived(VersMessage),
     VisionUpdated(ColorVisionData),
+    /// 視線データの更新
+    GazeUpdated(GazeData),
     /// プラグインからのアクション要求（権限チェック対象）
     ActionRequested {
         requester: VersId,
@@ -421,6 +399,7 @@ pub enum VersEventData {
     /// プラグインからの思考結果
     ThoughtResponse {
         agent_id: String,
+        engine_id: String,
         content: String,
         source_message_id: String,
     },
@@ -461,12 +440,17 @@ impl VersEvent {
     pub fn new(data: VersEventData) -> Self {
         Self {
             trace_id: VersId::new_trace_id(),
+            timestamp: Utc::now(),
             data,
         }
     }
 
     pub fn with_trace(trace_id: VersId, data: VersEventData) -> Self {
-        Self { trace_id, data }
+        Self {
+            trace_id,
+            timestamp: Utc::now(),
+            data,
+        }
     }
 }
 

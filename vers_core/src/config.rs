@@ -3,10 +3,18 @@ use axum::http::HeaderValue;
 use std::env;
 use std::path::PathBuf;
 
+/// Returns the directory containing the running executable.
+/// Falls back to CWD if the exe path cannot be determined.
+pub fn exe_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 #[derive(Clone)]
 pub struct AppConfig {
     pub database_url: String,
-    pub dashboard_path: PathBuf,
     pub port: u16,
     pub cors_origins: Vec<HeaderValue>,
     pub default_agent_id: String,
@@ -16,12 +24,16 @@ pub struct AppConfig {
     pub memory_context_limit: usize,
     pub admin_api_key: Option<String>,
     pub consensus_engines: Vec<String>,
+    pub update_repo: String,
+    pub event_history_size: usize,
 }
 
 impl AppConfig {
     pub fn load() -> anyhow::Result<Self> {
-        let database_url =
-            env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:./vers_memories.db".to_string());
+        let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
+            let db_path = exe_dir().join("data").join("vers_memories.db");
+            format!("sqlite:{}", db_path.display())
+        });
 
         let admin_api_key = env::var("VERS_API_KEY").ok();
 
@@ -43,10 +55,6 @@ impl AppConfig {
             .parse::<usize>()
             .context("Failed to parse MEMORY_CONTEXT_LIMIT")?;
 
-        let dashboard_path_str =
-            env::var("VERS_DASHBOARD_PATH").unwrap_or_else(|_| "./vers_dashboard/dist".to_string());
-        let dashboard_path = PathBuf::from(dashboard_path_str);
-
         let port = env::var("PORT")
             .unwrap_or_else(|_| "8081".to_string())
             .parse::<u16>()
@@ -67,6 +75,9 @@ impl AppConfig {
             allowed_hosts_str.split(',').map(|s| s.to_string()).collect()
         };
 
+        let update_repo = env::var("VERS_UPDATE_REPO")
+            .unwrap_or_else(|_| "karin-project/vers-system".to_string());
+
         let consensus_engines_str = env::var("CONSENSUS_ENGINES")
             .unwrap_or_else(|_| "mind.deepseek,mind.cerebras".to_string());
         let consensus_engines = consensus_engines_str
@@ -75,9 +86,13 @@ impl AppConfig {
             .filter(|s| !s.is_empty())
             .collect();
 
+        let event_history_size = env::var("EVENT_HISTORY_SIZE")
+            .unwrap_or_else(|_| "1000".to_string())
+            .parse::<usize>()
+            .context("Failed to parse EVENT_HISTORY_SIZE")?;
+
         Ok(Self {
             database_url,
-            dashboard_path,
             port,
             cors_origins,
             default_agent_id,
@@ -87,6 +102,8 @@ impl AppConfig {
             memory_context_limit,
             admin_api_key,
             consensus_engines,
+            update_repo,
+            event_history_size,
         })
     }
 }

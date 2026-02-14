@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { API_BASE } from '../services/api';
 
 export interface Metrics {
   total_requests: number;
@@ -12,7 +13,7 @@ export function useMetrics(pollIntervalMs: number = 10000) {
 
   const fetchMetrics = useCallback(async () => {
     try {
-      const res = await fetch('/api/metrics');
+      const res = await fetch(`${API_BASE}/metrics`);
       if (res.ok) setMetrics(await res.json());
     } catch (e) {
       console.error("Failed to fetch metrics", e);

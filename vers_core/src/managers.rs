@@ -109,7 +109,13 @@ impl PluginRegistry {
             let semaphore = self.event_semaphore.clone();
 
             futures.push(tokio::spawn(async move {
-                let _permit = semaphore.acquire().await.unwrap();
+                let _permit = match semaphore.acquire().await {
+                    Ok(p) => p,
+                    Err(_) => {
+                        tracing::warn!("Semaphore closed during shutdown, skipping plugin {}", id);
+                        return (id, Ok(Ok(None)));
+                    }
+                };
                 let result = tokio::time::timeout(timeout_duration, plugin.on_event(&event)).await;
                 drop(_permit);
                 (id, result)
@@ -165,7 +171,13 @@ async fn redispatch_plugin_event(
     current_depth: u8,
     semaphore: Arc<tokio::sync::Semaphore>,
 ) {
-    let _permit = semaphore.acquire().await.unwrap();
+    let _permit = match semaphore.acquire().await {
+        Ok(p) => p,
+        Err(_) => {
+            tracing::warn!("Semaphore closed during shutdown, skipping redispatch for {}", plugin_id);
+            return;
+        }
+    };
     let issuer_id = VersId::from_name(&plugin_id);
     let envelope = crate::EnvelopedEvent {
         event: Arc::new(vers_shared::VersEvent::with_trace(trace_id, new_event_data)),
@@ -236,6 +248,16 @@ impl PluginManager {
     pub async fn initialize_all(&self) -> anyhow::Result<PluginRegistry> {
         let mut registry = PluginRegistry::new(self.event_timeout_secs, self.max_event_depth);
         let (settings, mut config_map) = self.fetch_plugin_configs().await?;
+
+        // Inject API keys from environment variables at runtime (never persisted to DB)
+        if let Ok(key) = std::env::var("DEEPSEEK_API_KEY") {
+            config_map.entry("mind.deepseek".to_string()).or_default()
+                .entry("api_key".to_string()).or_insert(key);
+        }
+        if let Ok(key) = std::env::var("CEREBRAS_API_KEY") {
+            config_map.entry("mind.cerebras".to_string()).or_default()
+                .entry("api_key".to_string()).or_insert(key);
+        }
 
         for setting in settings {
             let pid = setting.plugin_id.clone();
@@ -319,8 +341,14 @@ impl PluginManager {
             let pid = VersId::from_name(plugin_id_str);
             let semaphore = self.bridge_semaphore.clone();
             tokio::spawn(async move {
-                let _permit = semaphore.acquire().await.unwrap();
                 while let Some(data) = p_rx.recv().await {
+                    let _permit = match semaphore.acquire().await {
+                        Ok(p) => p,
+                        Err(_) => {
+                            tracing::warn!("Semaphore closed during shutdown, stopping event bridge");
+                            break;
+                        }
+                    };
                     let envelope = crate::EnvelopedEvent {
                         event: Arc::new(vers_shared::VersEvent::new(data)),
                         issuer: Some(pid),

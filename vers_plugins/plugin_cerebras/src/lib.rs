@@ -73,18 +73,19 @@ impl Plugin for CerebrasPlugin {
                 message,
                 context,
             } => {
-                if engine_id != "mind.cerebras" {
+                if engine_id != Self::PLUGIN_ID {
                     return Ok(None);
                 }
                 let content = self.think(agent, message, context.clone()).await?;
                 return Ok(Some(vers_shared::VersEventData::ThoughtResponse {
                     agent_id: agent.id.clone(),
+                    engine_id: Self::PLUGIN_ID.to_string(),
                     content,
                     source_message_id: message.id.clone(),
                 }));
             }
             vers_shared::VersEventData::ConfigUpdated { plugin_id, config } => {
-                if plugin_id == "mind.cerebras" {
+                if plugin_id == Self::PLUGIN_ID {
                     let mut state = self.state.write().await;
                     if let Some(key) = config.get("api_key") {
                         state.api_key = key.clone();
@@ -92,7 +93,7 @@ impl Plugin for CerebrasPlugin {
                     if let Some(model) = config.get("model_id") {
                         state.model_id = model.clone();
                     }
-                    println!("🔌 Cerebras Plugin configuration hot-reloaded.");
+                    tracing::info!("🔌 Cerebras Plugin configuration hot-reloaded.");
                 }
             }
             _ => {}
@@ -108,7 +109,7 @@ impl Plugin for CerebrasPlugin {
             vers_shared::PluginCapability::Network(net) => {
                 let mut state = self.state.write().await;
                 state.http_client = Some(net);
-                println!("💉 Cerebras Plugin: NetworkCapability injected live.");
+                tracing::info!("💉 Cerebras Plugin: NetworkCapability injected live.");
             }
         }
         Ok(())

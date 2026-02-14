@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use sqlx::SqlitePool;
@@ -84,11 +85,17 @@ async fn test_event_cascading_protection() {
         router: tokio::sync::RwLock::new(axum::Router::new()),
     });
 
+    let metrics = Arc::new(vers_core::managers::SystemMetrics::new());
+    let event_history = Arc::new(tokio::sync::RwLock::new(VecDeque::new()));
+
     let processor = EventProcessor::new(
         registry.clone(),
         plugin_manager.clone(),
         tx_broadcast.clone(),
         dynamic_router,
+        event_history,
+        metrics,
+        1000, // max_history_size
     );
 
     let tx_internal_for_loop = tx_internal.clone();

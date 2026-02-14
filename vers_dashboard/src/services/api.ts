@@ -1,7 +1,7 @@
 import { AgentMetadata, PluginManifest } from '../types';
 
 const API_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/api`;
-const API_BASE = API_URL.endsWith('/api') ? API_URL : `${API_URL}/api`;
+export const API_BASE = API_URL.endsWith('/api') ? API_URL : `${API_URL}/api`;
 
 export const api = {
   async getAgents(): Promise<AgentMetadata[]> {

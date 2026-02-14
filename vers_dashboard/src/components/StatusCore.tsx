@@ -1,5 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
-import { memo } from 'react';
+import { useEffect, useState, useRef, memo } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { NeuralNetwork } from '../components/NeuralNetwork';
@@ -101,13 +100,13 @@ function TimelinePins({ events, startTime, endTime, onPinClick }: {
     <div className="absolute inset-x-0 -top-2 h-4 pointer-events-none">
       {pinEvents.map((e, i) => {
         const pos = ((e.timestamp - startTime) / duration) * 100;
-        const color = e.type === "MessageReceived" ? "#2e4de6" : (e.type === "ToolStart" ? e.payload.color : "#2ea8e6");
+        const color = e.type === "MessageReceived" ? "#2e4de6" : (e.type === "ToolStart" ? (e.payload?.color || "#2ea8e6") : "#2ea8e6");
         return (
           <div 
             key={i}
             className="absolute bottom-0 w-[1px] h-3 opacity-60 hover:opacity-100 hover:h-4 hover:w-[2px] transition-all cursor-pointer pointer-events-auto"
             style={{ left: `${pos}%`, backgroundColor: color }}
-            title={`${e.type === "MessageReceived" ? "Message" : (e.type === "ToolStart" ? e.payload.label : "")} at ${new Date(e.timestamp).toLocaleTimeString()}`}
+            title={`${e.type === "MessageReceived" ? "Message" : (e.type === "ToolStart" ? (e.payload?.label || "Tool") : "")} at ${new Date(e.timestamp).toLocaleTimeString()}`}
             onClick={(ev) => {
               ev.stopPropagation();
               onPinClick(e.timestamp);

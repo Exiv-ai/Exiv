@@ -1,0 +1,301 @@
+#!/bin/bash
+# ============================================================
+# VERS System Installer
+# Builds, installs, and configures VERS as a standalone system
+# ============================================================
+set -euo pipefail
+
+# --- Defaults ---
+INSTALL_DIR="/opt/vers"
+SETUP_SERVICE=false
+SETUP_PYTHON=true
+BUILD_RELEASE=true
+UNINSTALL=false
+SERVICE_USER="$(whoami)"
+
+# --- Colors ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+usage() {
+    cat << EOF
+VERS System Installer
+
+Usage: $0 [OPTIONS]
+
+Options:
+  --prefix DIR        Install directory (default: /opt/vers)
+  --service           Register as systemd service
+  --no-python         Skip Python venv setup
+  --no-build          Skip build (use existing binary)
+  --user USER         Service user (default: current user)
+  --uninstall         Remove VERS installation
+  -h, --help          Show this help
+
+Examples:
+  $0                           # Build & install to /opt/vers
+  $0 --prefix ~/vers           # Install to home directory
+  $0 --service                 # Install + systemd service
+  $0 --uninstall               # Remove installation
+EOF
+    exit 0
+}
+
+# --- Parse args ---
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --prefix)     INSTALL_DIR="$2"; shift 2 ;;
+        --service)    SETUP_SERVICE=true; shift ;;
+        --no-python)  SETUP_PYTHON=false; shift ;;
+        --no-build)   BUILD_RELEASE=false; shift ;;
+        --user)       SERVICE_USER="$2"; shift 2 ;;
+        --uninstall)  UNINSTALL=true; shift ;;
+        -h|--help)    usage ;;
+        *)            echo -e "${RED}Unknown option: $1${NC}"; usage ;;
+    esac
+done
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# ============================================================
+# Uninstall
+# ============================================================
+if [ "$UNINSTALL" = true ]; then
+    echo -e "${CYAN}=== VERS System Uninstaller ===${NC}"
+
+    if systemctl is-active --quiet vers 2>/dev/null; then
+        echo -e "${YELLOW}Stopping vers service...${NC}"
+        sudo systemctl stop vers
+        sudo systemctl disable vers
+    fi
+
+    if [ -f /etc/systemd/system/vers.service ]; then
+        echo "Removing systemd service..."
+        sudo rm -f /etc/systemd/system/vers.service
+        sudo systemctl daemon-reload
+    fi
+
+    if [ -d "$INSTALL_DIR" ]; then
+        echo "Removing $INSTALL_DIR..."
+        rm -rf "$INSTALL_DIR"
+    fi
+
+    echo -e "${GREEN}VERS uninstalled.${NC}"
+    exit 0
+fi
+
+# ============================================================
+# Install
+# ============================================================
+echo -e "${CYAN}=== VERS System Installer ===${NC}"
+echo "  Project:  $PROJECT_ROOT"
+echo "  Install:  $INSTALL_DIR"
+echo "  Python:   $SETUP_PYTHON"
+echo "  Service:  $SETUP_SERVICE"
+echo ""
+
+# --- Step 1: Build ---
+if [ "$BUILD_RELEASE" = true ]; then
+    echo -e "${CYAN}[1/5] Building dashboard...${NC}"
+    cd "$PROJECT_ROOT/vers_dashboard"
+    npm run build 2>&1 | tail -3
+
+    echo -e "${CYAN}[2/5] Building Rust binary (release)...${NC}"
+    cd "$PROJECT_ROOT"
+    cargo build --release 2>&1 | tail -5
+
+    echo -e "${CYAN}[3/5] Stripping binary...${NC}"
+    strip "$PROJECT_ROOT/target/release/vers_system"
+    BINARY_SIZE=$(du -h "$PROJECT_ROOT/target/release/vers_system" | cut -f1)
+    echo "  Binary size: $BINARY_SIZE"
+else
+    echo -e "${YELLOW}[1-3/5] Skipping build (--no-build)${NC}"
+    if [ ! -f "$PROJECT_ROOT/target/release/vers_system" ]; then
+        echo -e "${RED}Error: Binary not found at target/release/vers_system${NC}"
+        exit 1
+    fi
+fi
+
+# --- Step 4: Install files ---
+echo -e "${CYAN}[4/5] Installing to $INSTALL_DIR...${NC}"
+mkdir -p "$INSTALL_DIR/scripts"
+mkdir -p "$INSTALL_DIR/data"
+
+cp "$PROJECT_ROOT/target/release/vers_system" "$INSTALL_DIR/"
+cp "$PROJECT_ROOT/scripts/bridge_runtime.py"  "$INSTALL_DIR/scripts/"
+cp "$PROJECT_ROOT/scripts/bridge_main.py"     "$INSTALL_DIR/scripts/"
+cp "$PROJECT_ROOT/scripts/requirements.txt"   "$INSTALL_DIR/scripts/"
+
+if [ -f "$PROJECT_ROOT/scripts/vision_gaze_webcam.py" ]; then
+    cp "$PROJECT_ROOT/scripts/vision_gaze_webcam.py" "$INSTALL_DIR/scripts/"
+fi
+
+if [ -d "$PROJECT_ROOT/scripts/models" ]; then
+    cp -r "$PROJECT_ROOT/scripts/models" "$INSTALL_DIR/scripts/"
+fi
+
+# .env template (don't overwrite existing .env)
+if [ ! -f "$INSTALL_DIR/.env" ]; then
+    # Generate a cryptographically random API key (Principle #5: Strict Permission Isolation)
+    # Release builds REQUIRE VERS_API_KEY for all admin endpoints.
+    GENERATED_API_KEY=$(openssl rand -hex 32 2>/dev/null || od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
+
+    cat > "$INSTALL_DIR/.env" << ENVEOF
+# ============================================================
+# VERS System Configuration
+# Generated by install.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ)
+# ============================================================
+
+# --- Server ---
+PORT=8081
+RUST_LOG=info
+
+# --- Security (Principle #5: Strict Permission Isolation) ---
+# Admin API key for protected endpoints (plugin config, permissions, shutdown).
+# REQUIRED: Without this, all admin operations are denied in release builds.
+# Pass via X-API-Key header.
+VERS_API_KEY=${GENERATED_API_KEY}
+
+# --- Database ---
+# SQLite database path. The data/ directory is created automatically.
+DATABASE_URL=sqlite:${INSTALL_DIR}/data/vers_memories.db
+
+# --- AI Provider API Keys ---
+# Uncomment and set to enable reasoning engines.
+# DEEPSEEK_API_KEY=
+# CEREBRAS_API_KEY=
+
+# --- Consensus (Principle #8: Dynamic Intelligence Orchestration) ---
+# Comma-separated reasoning engine IDs for consensus: mode.
+# Messages prefixed with "consensus:" are routed to all listed engines.
+# CONSENSUS_ENGINES=mind.deepseek,mind.cerebras
+
+# --- Agent ---
+# DEFAULT_AGENT_ID=agent.karin
+
+# --- Tuning ---
+# MAX_EVENT_DEPTH=10
+# PLUGIN_EVENT_TIMEOUT_SECS=30
+# MEMORY_CONTEXT_LIMIT=10
+
+# --- Remote Update (Principle #8: HITL) ---
+# GitHub repository for update distribution (owner/repo).
+# Used by GET /api/system/update/check and POST /api/system/update/apply.
+# VERS_UPDATE_REPO=karin-project/vers-system
+
+# --- Network ---
+# CORS origins (comma-separated). The embedded dashboard is served from
+# the same origin, so CORS is only needed for external API clients.
+# CORS_ORIGINS=http://localhost:5173
+
+# --- Plugin Network Access (Principle #5) ---
+# Additional hosts that plugins with NetworkAccess permission may reach.
+# Default whitelist: api.deepseek.com, api.cerebras.ai, api.openai.com, api.anthropic.com
+# ALLOWED_HOSTS=
+ENVEOF
+    echo "  Created .env"
+    echo -e "  ${YELLOW}VERS_API_KEY has been auto-generated. Save it securely:${NC}"
+    echo -e "  ${CYAN}${GENERATED_API_KEY}${NC}"
+else
+    echo "  .env already exists, skipping"
+fi
+
+chmod +x "$INSTALL_DIR/vers_system"
+
+# --- Step 5: Python venv ---
+if [ "$SETUP_PYTHON" = true ]; then
+    echo -e "${CYAN}[5/5] Setting up Python environment...${NC}"
+
+    if ! command -v python3 &>/dev/null; then
+        echo -e "${RED}Error: python3 not found. Install Python 3 first.${NC}"
+        exit 1
+    fi
+
+    VENV_DIR="$INSTALL_DIR/venv"
+    if [ ! -d "$VENV_DIR" ]; then
+        python3 -m venv "$VENV_DIR"
+        echo "  Created venv at $VENV_DIR"
+    else
+        echo "  venv already exists"
+    fi
+
+    "$VENV_DIR/bin/pip" install --quiet --upgrade pip
+    "$VENV_DIR/bin/pip" install --quiet -r "$INSTALL_DIR/scripts/requirements.txt"
+    echo "  Python dependencies installed"
+
+    # Create a wrapper that uses the venv's python
+    cat > "$INSTALL_DIR/vers_run.sh" << RUNEOF
+#!/bin/bash
+# VERS System launcher (uses bundled Python venv)
+cd "\$(dirname "\$0")"
+export PATH="\$(pwd)/venv/bin:\$PATH"
+exec ./vers_system "\$@"
+RUNEOF
+    chmod +x "$INSTALL_DIR/vers_run.sh"
+    echo "  Created vers_run.sh (launcher with venv)"
+else
+    echo -e "${YELLOW}[5/5] Skipping Python setup (--no-python)${NC}"
+fi
+
+# --- Set ownership for service user ---
+if [ "$SETUP_SERVICE" = true ] && [ "$(id -u)" -eq 0 ] && [ "$SERVICE_USER" != "root" ]; then
+    echo -e "${CYAN}Setting ownership to $SERVICE_USER...${NC}"
+    chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR"
+fi
+
+# --- Systemd service ---
+if [ "$SETUP_SERVICE" = true ]; then
+    echo ""
+    echo -e "${CYAN}Setting up systemd service...${NC}"
+
+    EXEC_START="$INSTALL_DIR/vers_system"
+    if [ "$SETUP_PYTHON" = true ]; then
+        EXEC_START="$INSTALL_DIR/vers_run.sh"
+    fi
+
+    SERVICE_FILE="/etc/systemd/system/vers.service"
+    sudo tee "$SERVICE_FILE" > /dev/null << SVCEOF
+[Unit]
+Description=VERS System
+After=network.target
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$EXEC_START
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=$INSTALL_DIR/.env
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable vers
+    echo "  Service registered: vers.service"
+    echo "  Start with: sudo systemctl start vers"
+    echo "  Status:     sudo systemctl status vers"
+    echo "  Logs:       journalctl -u vers -f"
+fi
+
+# --- Summary ---
+echo ""
+echo -e "${GREEN}=== Installation complete ===${NC}"
+echo ""
+ls -lh "$INSTALL_DIR/"
+echo ""
+echo -e "  To run manually:  ${CYAN}cd $INSTALL_DIR && ./vers_system${NC}"
+if [ "$SETUP_PYTHON" = true ]; then
+    echo -e "  With Python venv: ${CYAN}cd $INSTALL_DIR && ./vers_run.sh${NC}"
+fi
+if [ "$SETUP_SERVICE" = true ]; then
+    echo -e "  As service:       ${CYAN}sudo systemctl start vers${NC}"
+fi
+echo -e "  Dashboard:        ${CYAN}http://localhost:8081${NC}"
+echo ""

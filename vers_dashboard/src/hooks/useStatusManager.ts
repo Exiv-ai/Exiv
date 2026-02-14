@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useEventStream } from './useEventStream';
+import { API_BASE } from '../services/api';
 import type { StrictSystemEvent } from '../types';
 
 interface ThoughtLine {
@@ -33,11 +34,12 @@ export const useStatusManager = (fetchMetrics: () => void) => {
 
     if (data.type === "Thought") {
       setThoughtLines(prev => {
-        const next = [...prev, { id: nextId.current++, text: data.payload.content, timestamp: eventTimestamp }];
+        const text = data.payload?.content || JSON.stringify(data.data) || "Unknown Thought";
+        const next = [...prev, { id: nextId.current++, text, timestamp: eventTimestamp }];
         return next.slice(-12);
       });
     } else if (data.type === "ResponseGenerated") {
-      const text = data.payload.content.replace(/\n/g, ' ');
+      const text = (data.payload?.content || "").replace(/\n/g, ' ');
       const segments: string[] = text.match(/.{1,100}/g) || [];
       setThoughtLines(prev => {
         const next = [...prev, ...segments.slice(0, 3).map((s: string) => ({ id: nextId.current++, text: s, timestamp: eventTimestamp }))];
@@ -49,12 +51,12 @@ export const useStatusManager = (fetchMetrics: () => void) => {
     }
   }, [fetchMetrics, isHistoryLoaded]);
 
-  useEventStream('/api/events', handleEvent);
+  useEventStream(`${API_BASE}/events`, handleEvent);
 
   useEffect(() => {
     const fetchHistory = async () => {
       try {
-        const res = await fetch('/api/history');
+        const res = await fetch(`${API_BASE}/history`);
         if (res.ok) {
           const history: StrictSystemEvent[] = await res.json();
           const now = Date.now();

@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { Suspense, lazy } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Activity, Database, MessageSquare, Puzzle, Settings, Cpu, Brain, Zap, Shield, LucideIcon } from 'lucide-react';
+import { Activity, Database, MessageSquare, Puzzle, Settings, Cpu, Brain, Zap, Shield, Eye, Power, Play, Pause, LucideIcon } from 'lucide-react';
 import { InteractiveGrid } from '../components/InteractiveGrid';
 import { GlassWindow } from '../components/GlassWindow';
 import { CustomCursor } from '../components/CustomCursor';
+import { SecurityGuard } from '../components/SecurityGuard';
 import { PluginManifest } from '../types';
 import { useWindowManager } from '../hooks/useWindowManager';
 import { useDraggable } from '../hooks/useDraggable';
+import { useEventStream } from '../hooks/useEventStream';
+import { GazeTracker } from '../components/GazeTracker';
 
 import { api } from '../services/api';
 
@@ -16,6 +19,38 @@ const MemoryCore = lazy(() => import('../components/MemoryCore').then(m => ({ de
 const VersWorkspace = lazy(() => import('../components/AgentWorkspace').then(m => ({ default: m.AgentWorkspace })));
 const VersPluginManager = lazy(() => import('../components/VersPluginManager').then(m => ({ default: m.VersPluginManager })));
 
+function SystemLogView() {
+  const [logs, setLogs] = useState<string[]>([]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEventStream('/api/events', (event) => {
+    const timestamp = new Date().toLocaleTimeString();
+    const logLine = `[${timestamp}] ${event.type}: ${JSON.stringify(event.data).slice(0, 100)}...`;
+    setLogs(prev => [...prev, logLine].slice(-50));
+  });
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [logs]);
+
+  return (
+    <div className="flex-1 flex flex-col p-6 font-mono text-[10px] bg-slate-900/90 text-blue-400 overflow-hidden">
+      <div className="flex items-center gap-2 mb-4 border-b border-blue-900/50 pb-2">
+        <Cpu size={14} />
+        <span className="font-black tracking-widest">KERNEL_LIVE_LOG v0.3.3</span>
+      </div>
+      <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-1 no-scrollbar">
+        {logs.length === 0 && <div className="opacity-30">AWAITING_SIGNAL...</div>}
+        {logs.map((log, i) => (
+          <div key={i} className="animate-in fade-in slide-in-from-left-1 duration-300">
+            <span className="opacity-50 mr-2">&gt;</span>{log}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function Home() {
   const containerRef = useRef<HTMLDivElement>(null);
   const realMouse = useRef({ x: -1000, y: -1000 });
@@ -23,12 +58,29 @@ export function Home() {
 
   const [activeMainView, setActiveMainView] = useState<string | null>(null);
   const [isCursorActive, setIsCursorActive] = useState(true);
+  const [isGazeActive, setIsGazeActive] = useState(false);
   const [plugins, setPlugins] = useState<PluginManifest[]>([]);
 
   // Phase 1 Refactor: Use Custom Hooks
   const { windows, openWindow, closeWindow, focusWindow } = useWindowManager();
   
-  const handleItemClick = (item: any) => {
+  const handleItemClick = async (item: any) => {
+    if (item.path.startsWith('api:')) {
+      const command = item.path.split(':')[1];
+      try {
+        await api.post(`/plugin/${item.pluginId}/action/${command}`, {});
+        console.log(`Action ${command} executed for ${item.pluginId}`);
+        // 🆕 Handle gaze tracking toggle (flexible ID check)
+        if ((item.pluginId === 'python.gaze' || item.pluginId === 'vision.gaze_webcam') && command === 'toggle') {
+          console.log("👁️ Toggling GazeTracker component...");
+          setIsGazeActive(prev => !prev);
+        }
+      } catch (err) {
+        console.error(`Failed to execute action ${command}:`, err);
+      }
+      return;
+    }
+
     if (item.path === '#') {
       setActiveMainView(item.id);
     } else {
@@ -71,6 +123,10 @@ export function Home() {
     'Brain': Brain,
     'Zap': Zap,
     'Shield': Shield,
+    'Eye': Eye,
+    'Power': Power,
+    'Play': Play,
+    'Pause': Pause,
   };
 
   const menuItems = useMemo(() => {
@@ -87,7 +143,7 @@ export function Home() {
       .map(p => ({
         id: p.id,
         label: p.name.split('.').pop()?.toUpperCase() || p.name.toUpperCase(),
-        path: p.action_target?.startsWith('/') ? p.action_target : '#',
+        path: (p.action_target?.includes(':') || p.action_target?.startsWith('/')) ? p.action_target : '#',
         icon: iconMap[p.action_icon || 'Puzzle'] || Puzzle,
         disabled: false,
         pluginId: p.id
@@ -133,12 +189,15 @@ export function Home() {
               <Suspense fallback={<div className="flex items-center justify-center h-full text-xs font-mono text-slate-400">SYNCHRONIZING...</div>}>
                 {activeMainView === 'sandbox' && <VersWorkspace />}
                 {activeMainView === 'plugin' && <VersPluginManager />}
-                {activeMainView === 'system' && <div className="p-20 text-slate-400 font-mono text-xs flex-1 flex items-center justify-center">SYSTEM SETTINGS MODULE</div>}
+                {activeMainView === 'system' && <SystemLogView />}
               </Suspense>
             </div>
           </div>
         </div>
       )}
+
+      {/* Security Layer */}
+      <SecurityGuard />
 
       {/* Windows Layer */}
       <div className="absolute inset-0 z-30 pointer-events-none">
@@ -157,7 +216,7 @@ export function Home() {
                 {win.type === 'memory' && <MemoryCore isWindowMode={true} onClose={() => closeWindow(win.id)} />}
                 {win.type === 'sandbox' && <VersWorkspace />}
                 {win.type === 'plugin' && <VersPluginManager />}
-                {win.type === 'system' && <div className="p-8 text-slate-500 font-mono text-xs">SYSTEM / CONFIG MODULE INTEGRATED.</div>}
+                {win.type === 'system' && <SystemLogView />}
               </Suspense>
             </GlassWindow>
           </div>
@@ -211,6 +270,7 @@ export function Home() {
         </div>
       </div>
       {isCursorActive && <CustomCursor />}
+      {isGazeActive && <GazeTracker />}
     </div>
   );
 }
