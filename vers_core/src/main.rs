@@ -9,14 +9,12 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tracing::info;
 
-use vers_shared::VersEvent;
-
 use vers_core::{
     config::AppConfig,
     db,
     events::EventProcessor,
-    handlers,
-    managers::{AgentManager, PluginManager, SystemHandler},
+    handlers::{self, system::SystemHandler},
+    managers::{AgentManager, PluginManager},
     AppState,
 };
 
@@ -29,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("+---------------------------------------+");
     info!("|            VERS-SYSTEM Kernel         |");
-    info!("|             Version 0.3.3-ASC         |");
+    info!("|             Version {:<10}      |", env!("CARGO_PKG_VERSION"));
     info!("+---------------------------------------+");
 
     let config = AppConfig::load()?;
@@ -43,7 +41,12 @@ async fn main() -> anyhow::Result<()> {
     db::init_db(&pool, &config.database_url).await?;
 
     // 2. Plugin Manager Setup
-    let mut plugin_manager_mut = PluginManager::new(pool.clone());
+    let mut plugin_manager_mut = PluginManager::new(
+        pool.clone(),
+        config.allowed_hosts.clone(),
+        config.plugin_event_timeout_secs,
+        config.max_event_depth,
+    );
     plugin_manager_mut.register_builtins();
     let plugin_manager = Arc::new(plugin_manager_mut);
 
@@ -54,17 +57,36 @@ async fn main() -> anyhow::Result<()> {
     // 4. Managers & Internal Handlers
     let agent_manager = AgentManager::new(pool.clone());
     let (tx, _rx) = broadcast::channel(100);
-    let (event_tx, event_rx) = mpsc::channel::<VersEvent>(100);
+    let (event_tx, event_rx) = mpsc::channel::<vers_core::EnvelopedEvent>(100);
+
+    let mut dynamic_routes = Router::new();
+    let plugins_snapshot = registry_arc.plugins.read().await;
+    for (id, plugin) in plugins_snapshot.iter() {
+        if let Some(web) = plugin.as_web() {
+            dynamic_routes = web.register_routes(dynamic_routes);
+            info!("🔌 Registered dynamic routes for web-enabled plugin: {}", id);
+        }
+    }
+    drop(plugins_snapshot);
+
+    let dynamic_router = Arc::new(vers_core::DynamicRouter {
+        router: tokio::sync::RwLock::new(dynamic_routes),
+    });
 
     // 🔌 System Handler の登録 (Principle #3: Everything is a Handler)
     let system_handler = Arc::new(SystemHandler::new(
         registry_arc.clone(),
         agent_manager.clone(),
         config.default_agent_id.clone(),
+        event_tx.clone(),
+        config.memory_context_limit,
     ));
     
-    // Registry に内部ハンドラを追加
-    registry_arc.add_internal_handler(system_handler).await;
+    // Registry にプラグインとして追加 (内部可変性を利用)
+    {
+        let mut plugins = registry_arc.plugins.write().await;
+        plugins.insert("core.system".to_string(), system_handler);
+    }
 
     // 5. App State
     let app_state = Arc::new(AppState {
@@ -74,10 +96,17 @@ async fn main() -> anyhow::Result<()> {
         pool: pool.clone(),
         agent_manager: agent_manager.clone(),
         plugin_manager: plugin_manager.clone(),
+        dynamic_router: dynamic_router.clone(),
+        config: config.clone(),
     });
 
     // 6. Event Loop
-    let processor = EventProcessor::new(registry_arc.clone(), plugin_manager.clone(), tx.clone());
+    let processor = EventProcessor::new(
+        registry_arc.clone(),
+        plugin_manager.clone(),
+        tx.clone(),
+        dynamic_router.clone(),
+    );
 
     let event_tx_clone = event_tx.clone();
     tokio::spawn(async move {
@@ -107,22 +136,15 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::update_agent),
         );
 
-    let mut dynamic_routes = Router::new();
-    for (id, plugin) in registry_arc.plugins.iter() {
-        if let Some(web) = plugin.as_web() {
-            dynamic_routes = web.register_routes(dynamic_routes);
-            info!("🔌 Registered dynamic routes for web-enabled plugin: {}", id);
-        }
-    }
-
-    let dynamic_routes_with_state = dynamic_routes.with_state(app_state.clone() as Arc<dyn std::any::Any + Send + Sync>);
     let app = Router::new()
-        .nest("/api", api_routes.with_state(app_state.clone()).merge(dynamic_routes_with_state))
+        .nest("/api", api_routes.with_state(app_state.clone()))
+        .route("/api/plugin/*path", any(dynamic_proxy_handler))
+        .with_state(app_state.clone())
         .nest_service("/", ServeDir::new(config.dashboard_path))
         .layer(
             CorsLayer::new()
                 .allow_origin(config.cors_origins)
-                .allow_methods([axum::http::Method::GET, ax_http_Method::POST])
+                .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
                 .allow_headers([axum::http::header::CONTENT_TYPE]),
         );
 
@@ -131,9 +153,30 @@ async fn main() -> anyhow::Result<()> {
         "🚀 VERS-SYSTEM Kernel is listening on http://0.0.0.0:{}",
         config.port
     );
+
     axum::serve(listener, app).await?;
     Ok(())
 }
 
-// Helper to fix potential typo in code above
-use axum::http::Method as ax_http_Method;
+use axum::extract::State;
+use axum::http::Request;
+use axum::response::IntoResponse;
+use axum::routing::any;
+use tower::ServiceExt;
+
+async fn dynamic_proxy_handler(
+    State(state): State<Arc<AppState>>,
+    request: Request<axum::body::Body>,
+) -> impl IntoResponse {
+    let router = {
+        let router_lock = state.dynamic_router.router.read().await;
+        router_lock.clone()
+    };
+
+    let any_state = state.clone() as Arc<dyn std::any::Any + Send + Sync>;
+    router
+        .with_state(any_state)
+        .oneshot(request)
+        .await
+        .into_response()
+}

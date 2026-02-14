@@ -34,6 +34,7 @@ impl Plugin for MockPlugin {
             name: "Mock".to_string(),
             description: "".to_string(),
             version: "1.0.0".to_string(),
+            category: vers_shared::PluginCategory::Tool,
             service_type: ServiceType::Skill,
             tags: vec![],
             is_active: true,
@@ -50,7 +51,7 @@ impl Plugin for MockPlugin {
         }
     }
 
-    async fn on_event(&self, _event: &VersEvent) -> anyhow::Result<Option<VersEvent>> {
+    async fn on_event(&self, _event: &VersEvent) -> anyhow::Result<Option<vers_shared::VersEventData>> {
         Ok(None)
     }
 
@@ -66,8 +67,8 @@ impl Plugin for MockPlugin {
 async fn test_dynamic_permission_elevation_flow() {
     // 1. Setup Kernel Components
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    let mut registry_raw = PluginRegistry::new();
-    let plugin_manager = Arc::new(PluginManager::new(pool.clone()));
+    let registry_raw = PluginRegistry::new(5, 10);
+    let plugin_manager = Arc::new(PluginManager::new(pool.clone(), vec![], 5, 10));
     let (tx_internal, _rx_internal) = tokio::sync::broadcast::channel(10);
 
     // 2. Register Mock Plugin
@@ -75,10 +76,21 @@ async fn test_dynamic_permission_elevation_flow() {
     let mock_plugin = Arc::new(MockPlugin::new(plugin_id));
     let injected_flag = mock_plugin.injected.clone();
     
-    registry_raw.plugins.insert(plugin_id.to_string(), mock_plugin.clone());
+    {
+        let mut plugins = registry_raw.plugins.write().await;
+        plugins.insert(plugin_id.to_string(), mock_plugin.clone());
+    }
     
     let registry = Arc::new(registry_raw);
-    let processor = EventProcessor::new(registry.clone(), plugin_manager.clone(), tx_internal);
+    let dynamic_router = Arc::new(vers_core::DynamicRouter {
+        router: tokio::sync::RwLock::new(axum::Router::new()),
+    });
+    let processor = EventProcessor::new(
+        registry.clone(),
+        plugin_manager.clone(),
+        tx_internal,
+        dynamic_router,
+    );
     let (event_tx, event_rx) = mpsc::channel(10);
 
     // 3. Verify initial state (no permission)
@@ -89,7 +101,7 @@ async fn test_dynamic_permission_elevation_flow() {
     }
 
     // 4. Simulate PermissionGranted Event
-    let grant_event = VersEvent::PermissionGranted {
+    let grant_event_data = vers_shared::VersEventData::PermissionGranted {
         plugin_id: plugin_id.to_string(),
         permission: Permission::NetworkAccess,
     };
@@ -101,7 +113,12 @@ async fn test_dynamic_permission_elevation_flow() {
     });
 
     // Send event
-    event_tx.send(grant_event).await.unwrap();
+    event_tx.send(vers_core::EnvelopedEvent {
+        event: Arc::new(vers_shared::VersEvent::new(grant_event_data)),
+        issuer: None,
+        correlation_id: None,
+        depth: 0,
+    }).await.unwrap();
 
     // 5. Assert: Registry is updated
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;

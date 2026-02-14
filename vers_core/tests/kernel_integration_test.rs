@@ -5,26 +5,29 @@ use axum::{
 use plugin_deepseek::DeepSeekPlugin;
 use sqlx::SqlitePool;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
 use tower::ServiceExt;
-use vers_shared::{Plugin, VersEvent};
+use vers_shared::{PluginCast, PluginConfig};
 use std::any::Any;
 
 #[tokio::test]
 async fn test_dynamic_routing_registration() {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::query("CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT, description TEXT, status TEXT, default_engine_id TEXT, metadata TEXT)").execute(&pool).await.unwrap();
+    sqlx::query("CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT, description TEXT, status TEXT, default_engine_id TEXT, required_capabilities TEXT, metadata TEXT)").execute(&pool).await.unwrap();
     sqlx::query("CREATE TABLE plugin_settings (plugin_id TEXT PRIMARY KEY, is_active BOOLEAN, allowed_permissions TEXT)")
         .execute(&pool)
         .await
         .unwrap();
     sqlx::query("CREATE TABLE plugin_configs (plugin_id TEXT, config_key TEXT, config_value TEXT, PRIMARY KEY(plugin_id, config_key))").execute(&pool).await.unwrap();
 
-    let ds_plugin = Arc::new(DeepSeekPlugin::new(
-        vers_shared::VersId::from_name("test"),
-        None,
-        None,
-    ));
+    let config = PluginConfig {
+        id: "test.deepseek".to_string(),
+        config_values: [
+            ("api_key".to_string(), "test_key".to_string()),
+            ("model_id".to_string(), "deepseek-chat".to_string()),
+        ].into_iter().collect(),
+    };
+
+    let ds_plugin = Arc::new(DeepSeekPlugin::new_plugin(config).await.unwrap());
 
     let mut dynamic_routes = axum::Router::new();
     if let Some(web) = ds_plugin.as_web() {
@@ -62,11 +65,10 @@ async fn test_permission_logic_unit() {
 
 #[tokio::test]
 async fn test_capability_injection_logic() {
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::query("CREATE TABLE plugin_settings (plugin_id TEXT PRIMARY KEY, is_active BOOLEAN, allowed_permissions TEXT)").execute(&pool).await.unwrap();
+    let _pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     
     let perms_ok: Vec<vers_shared::Permission> = vec![vers_shared::Permission::NetworkAccess];
-    let client = Arc::new(vers_core::capabilities::SafeHttpClient::new());
+    let client = Arc::new(vers_core::capabilities::SafeHttpClient::new(vec![]));
     let capability = if perms_ok.contains(&vers_shared::Permission::NetworkAccess) {
         Some(client.clone() as Arc<dyn vers_shared::NetworkCapability>)
     } else {
@@ -87,17 +89,22 @@ async fn test_capability_injection_logic() {
 async fn test_panic_isolation() {
     use vers_core::managers::PluginRegistry;
     use vers_shared::{Plugin, PluginManifest, ServiceType, VersId};
-    use std::collections::HashMap;
 
     struct PanicPlugin(VersId);
+
+    impl PluginCast for PanicPlugin {
+        fn as_any(&self) -> &dyn std::any::Any { self }
+    }
+
     #[async_trait::async_trait]
     impl Plugin for PanicPlugin {
         fn manifest(&self) -> PluginManifest {
             PluginManifest {
-                id: self.0,
+                id: self.0.to_string(),
                 name: "Panic".to_string(),
                 description: "".to_string(),
                 version: "".to_string(),
+                category: vers_shared::PluginCategory::Tool,
                 service_type: ServiceType::Reasoning,
                 tags: vec![],
                 is_active: true,
@@ -105,43 +112,61 @@ async fn test_panic_isolation() {
                 required_config_keys: vec![],
                 action_icon: None,
                 action_target: None,
+                icon_data: None,
+                magic_seal: 0x56455253,
+                sdk_version: "1.0.0".to_string(),
                 required_permissions: vec![],
                 provided_capabilities: vec![],
                 provided_tools: vec![],
             }
         }
-        fn as_any(&self) -> &dyn std::any::Any { self }
-        async fn on_event(&self, _e: &vers_shared::VersEvent) -> anyhow::Result<Option<vers_shared::VersEvent>> {
+        async fn on_event(&self, _e: &vers_shared::VersEvent) -> anyhow::Result<Option<vers_shared::VersEventData>> {
             panic!("Boom!");
         }
     }
 
     struct NormalPlugin(Arc<tokio::sync::mpsc::Sender<bool>>, VersId);
+
+    impl PluginCast for NormalPlugin {
+        fn as_any(&self) -> &dyn std::any::Any { self }
+    }
+
     #[async_trait::async_trait]
     impl Plugin for NormalPlugin {
         fn manifest(&self) -> PluginManifest {
-            PluginManifest { id: self.1, name: "Normal".to_string(), ..PanicPlugin(self.1).manifest() }
+            let mut m = PanicPlugin(self.1).manifest();
+            m.name = "Normal".to_string();
+            m.id = self.1.to_string();
+            m
         }
-        fn as_any(&self) -> &dyn std::any::Any { self }
-        async fn on_event(&self, _e: &vers_shared::VersEvent) -> anyhow::Result<Option<vers_shared::VersEvent>> {
+        async fn on_event(&self, _e: &vers_shared::VersEvent) -> anyhow::Result<Option<vers_shared::VersEventData>> {
             let _ = self.0.send(true).await;
             Ok(None)
         }
     }
 
-    let mut registry = PluginRegistry::new();
+    let registry = PluginRegistry::new(5, 10);
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     
     let id_panic = VersId::new();
     let id_normal = VersId::new();
     
-    registry.plugins.insert("panic".into(), Arc::new(PanicPlugin(id_panic)));
-    registry.plugins.insert("normal".into(), Arc::new(NormalPlugin(Arc::new(tx), id_normal)));
+    {
+        let mut plugins = registry.plugins.write().await;
+        plugins.insert("panic".into(), Arc::new(PanicPlugin(id_panic)));
+        plugins.insert("normal".into(), Arc::new(NormalPlugin(Arc::new(tx), id_normal)));
+    }
 
-    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(10);
-    let event = vers_shared::VersEvent::SystemNotification("test".into());
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel::<vers_core::EnvelopedEvent>(10);
+    let event = vers_shared::VersEvent::new(vers_shared::VersEventData::SystemNotification("test".into()));
 
-    registry.dispatch_event(&event, &event_tx).await;
+    let envelope = vers_core::EnvelopedEvent {
+        event: Arc::new(event),
+        issuer: None,
+        correlation_id: None,
+        depth: 0,
+    };
+    registry.dispatch_event(envelope, &event_tx).await;
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv()).await;
     assert!(result.is_ok());

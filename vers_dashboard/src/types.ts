@@ -16,6 +16,7 @@ export interface AgentMetadata {
   id: VersId;
   name: string;
   description: string;
+  default_engine_id?: string;
   required_capabilities: CapabilityType[];
   status: 'online' | 'offline' | 'busy';
   metadata: Record<string, string>;
@@ -39,11 +40,14 @@ export type CapabilityType =
   | 'Vision'
   | 'HAL';
 
+export type PluginCategory = 'Agent' | 'Tool' | 'Memory' | 'System' | 'Other';
+
 export interface PluginManifest {
   id: VersId;
   name: string;
   description: string;
   version: string;
+  category: PluginCategory;
   service_type: ServiceType;
   tags: string[];
   is_active: boolean;

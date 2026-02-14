@@ -1,5 +1,5 @@
 [package]
-name = "plugin_ks2_2"
+name = "plugin_ks22"
 version.workspace = true
 edition.workspace = true
 

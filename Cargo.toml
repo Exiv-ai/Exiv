@@ -2,9 +2,12 @@
 members = [
     "vers_core",
     "vers_shared",
-    "vers_plugins/plugin_ks2_2",
+    "vers_plugins/plugin_ks22",
     "vers_plugins/plugin_deepseek",
     "vers_plugins/plugin_cerebras",
+    "vers_plugins/plugin_moderator",
+    "vers_plugins/plugin_mcp",
+    "vers_plugins/plugin_vision",
     "vers_plugins/plugin_cursor", "vers_macros",
 ]
 resolver = "2"

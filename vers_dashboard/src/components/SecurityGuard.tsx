@@ -1,12 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Shield, Lock, Unlock, AlertTriangle, X, Check, ShieldAlert } from 'lucide-react';
-import { useEventStream } from '../hooks/useEventStream';
 import { api } from '../services/api';
 
 interface PermissionRequest {
+  request_id: string;
   plugin_id: string;
-  permission: string;
-  reason: string;
+  permission_type: string;
+  target_resource?: string;
+  justification: string;
+  status: string;
+  created_at: string;
 }
 
 export function SecurityGuard() {
@@ -15,31 +18,35 @@ export function SecurityGuard() {
   const [grantedIds, setGrantedIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  useEventStream('/api/events', (event) => {
-    if (event.type === 'PermissionRequested') {
-      const data = event.data;
-      setRequests(prev => {
-        if (prev.some(r => r.plugin_id === data.plugin_id && r.permission === data.permission)) {
-          return prev;
-        }
-        return [...prev, data];
-      });
-    }
-  });
+  // Poll for pending permission requests
+  useEffect(() => {
+    const fetchPending = async () => {
+      try {
+        const pending = await api.getPendingPermissions();
+        setRequests(pending);
+      } catch (err) {
+        console.error("Failed to fetch pending permissions:", err);
+      }
+    };
+
+    fetchPending();
+    const interval = setInterval(fetchPending, 3000); // Poll every 3 seconds
+    return () => clearInterval(interval);
+  }, []);
 
   const handleGrant = async (req: PermissionRequest) => {
-    const reqId = `${req.plugin_id}-${req.permission}`;
+    const reqId = req.request_id;
     setAuthorizingIds(prev => [...prev, reqId]);
     setError(null);
 
     try {
-      await api.grantPermission(req.plugin_id, req.permission);
+      await api.approvePermission(req.request_id, 'admin');
       setAuthorizingIds(prev => prev.filter(id => id !== reqId));
       setGrantedIds(prev => [...prev, reqId]);
-      
+
       // Keep visible for 2 seconds to show success
       setTimeout(() => {
-        setRequests(prev => prev.filter(r => r !== req));
+        setRequests(prev => prev.filter(r => r.request_id !== reqId));
         setGrantedIds(prev => prev.filter(id => id !== reqId));
       }, 2000);
     } catch (err) {
@@ -49,9 +56,15 @@ export function SecurityGuard() {
     }
   };
 
-  const handleDeny = (req: PermissionRequest) => {
-    setRequests(prev => prev.filter(r => r !== req));
-    setError(null);
+  const handleDeny = async (req: PermissionRequest) => {
+    try {
+      await api.denyPermission(req.request_id, 'admin');
+      setRequests(prev => prev.filter(r => r.request_id !== req.request_id));
+      setError(null);
+    } catch (err) {
+      setError(`Failed to deny permission: ${err}`);
+      console.error("Failed to deny permission:", err);
+    }
   };
 
   if (requests.length === 0) return null;
@@ -67,13 +80,13 @@ export function SecurityGuard() {
       )}
 
       {requests.map((req, idx) => {
-        const reqId = `${req.plugin_id}-${req.permission}`;
+        const reqId = req.request_id;
         const isAuthorizing = authorizingIds.includes(reqId);
         const isGranted = grantedIds.includes(reqId);
 
         return (
-          <div 
-            key={`${req.plugin_id}-${req.permission}-${idx}`}
+          <div
+            key={req.request_id}
             className={`bg-white/90 backdrop-blur-2xl border rounded-[2rem] shadow-2xl overflow-hidden shadow-[#2e4de6]/20 flex flex-col transition-all duration-500 ${
               isGranted ? 'border-emerald-500 scale-95 opacity-50' : 'border-white'
             }`}
@@ -115,9 +128,12 @@ export function SecurityGuard() {
                    <div className={`w-1.5 h-1.5 rounded-full ${isGranted ? 'bg-emerald-500' : 'bg-amber-500'}`} />
                    <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Capability Status</span>
                  </div>
-                 <p className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">{req.permission}</p>
+                 <p className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">{req.permission_type}</p>
+                 {req.target_resource && (
+                   <p className="text-[9px] text-slate-400 font-mono mb-1">{req.target_resource}</p>
+                 )}
                  <p className="text-[10px] text-slate-500 leading-relaxed italic">
-                   {isGranted ? "Resource has been successfully injected into container." : `"${req.reason}"`}
+                   {isGranted ? "Resource has been successfully injected into container." : `"${req.justification}"`}
                  </p>
               </div>
 

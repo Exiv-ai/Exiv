@@ -4,8 +4,10 @@ use syn::{parse_macro_input, DeriveInput, LitStr, parse::Parse, parse::ParseStre
 use base64::{Engine as _, engine::general_purpose};
 use std::path::PathBuf;
 
+/// Parsed plugin attribute structure
 struct PluginAttr {
     name: String,
+    category: String, // Added: category information
     service_type: String,
     description: String,
     version: String,
@@ -14,11 +16,13 @@ struct PluginAttr {
     config_keys: Vec<String>,
     permissions: Vec<String>,
     capabilities: Vec<String>,
+    tags: Vec<String>,
 }
 
 impl Parse for PluginAttr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut name = String::new();
+        let mut category = String::new(); // Added
         let mut service_type = String::new();
         let mut description = String::new();
         let mut version = String::from("0.1.0");
@@ -27,6 +31,7 @@ impl Parse for PluginAttr {
         let mut config_keys = Vec::new();
         let mut permissions = Vec::new();
         let mut capabilities = Vec::new();
+        let mut tags = Vec::new();
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -36,6 +41,7 @@ impl Parse for PluginAttr {
                 let val: LitStr = input.parse()?;
                 match key.to_string().as_str() {
                     "name" => name = val.value(),
+                    "category" => category = val.value(), // Added
                     "kind" => service_type = val.value(),
                     "description" => description = val.value(),
                     "version" => version = val.value(),
@@ -57,6 +63,7 @@ impl Parse for PluginAttr {
                     "permissions" => permissions = vals,
                     "capabilities" => capabilities = vals,
                     "config_keys" => config_keys = vals,
+                    "tags" => tags = vals,
                     _ => {}
                 }
             }
@@ -66,56 +73,88 @@ impl Parse for PluginAttr {
             }
         }
 
-        Ok(PluginAttr { name, service_type, description, version, icon, action_icon, config_keys, permissions, capabilities })
+        Ok(PluginAttr { name, category, service_type, description, version, icon, action_icon, config_keys, permissions, capabilities, tags })
     }
 }
 
+/// Main macro entry point
 #[proc_macro_attribute]
 pub fn vers_plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
     let attr = parse_macro_input!(attr as PluginAttr);
     
+    match emit_plugin_code(input, attr) {
+        Ok(expanded) => TokenStream::from(expanded),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// Code generation logic
+fn emit_plugin_code(input: DeriveInput, attr: PluginAttr) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
+
+    // Early validation: check required fields (reduces compilation time on errors)
+    if attr.name.is_empty() {
+        return Err(syn::Error::new_spanned(&input.ident, "Plugin 'name' is required"));
+    }
+    if attr.service_type.is_empty() {
+        return Err(syn::Error::new_spanned(&input.ident, "Plugin 'kind' (service_type) is required"));
+    }
+    if attr.description.is_empty() {
+        return Err(syn::Error::new_spanned(&input.ident, "Plugin 'description' is required"));
+    }
+
     let factory_name = quote::format_ident!("{}Factory", name);
     let plugin_name_str = &attr.name;
     let service_type_ident = quote::format_ident!("{}", attr.service_type);
     let description_str = &attr.description;
     let version_str = &attr.version;
-    let action_icon_token = match attr.action_icon {
+    
+    let action_icon_token = match &attr.action_icon {
         Some(i) => quote! { Some(#i.to_string()) },
         None => quote! { None },
     };
     let config_keys_tokens = attr.config_keys.iter().map(|k| quote! { #k.to_string() });
 
-    // Handle Icon embedding
-    let mut icon_base64 = None;
-    if let Some(ref icon_path_str) = attr.icon {
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-        let mut icon_path = PathBuf::from(manifest_dir);
-        icon_path.push(icon_path_str);
+    // Icon embedding process
+    // Optimization: VERS_SKIP_ICON_EMBED=1 skips icon embedding (faster development builds)
+    let icon_data_tokens = if let Some(ref icon_path_str) = attr.icon {
+        let skip_embed = std::env::var("VERS_SKIP_ICON_EMBED")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(false);
 
-        match std::fs::read(&icon_path) {
-            Ok(bytes) => {
-                if bytes.len() > 64 * 1024 {
-                    return syn::Error::new_spanned(
-                        &input.ident,
-                        format!("🔌 Plugin Icon '{}' is too large ({} bytes). Limit is 64KB.", icon_path_str, bytes.len())
-                    ).to_compile_error().into();
+        if skip_embed {
+            // Development mode: skip icon embedding (reduces build time)
+            eprintln!("⚡ Skipping icon embed for {} (VERS_SKIP_ICON_EMBED=1)", plugin_name_str);
+            quote! { None }
+        } else {
+            let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+            let mut icon_path = PathBuf::from(manifest_dir);
+            icon_path.push(icon_path_str);
+
+            match std::fs::read(&icon_path) {
+                Ok(bytes) => {
+                    let byte_count = bytes.len();
+                    if byte_count > 64 * 1024 {
+                        return Err(syn::Error::new_spanned(
+                            &input.ident,
+                            format!("🔌 Plugin Icon '{}' is too large ({} bytes). Limit is 64KB.", icon_path_str, byte_count)
+                        ));
+                    }
+                    let base64_data = general_purpose::STANDARD.encode(bytes);
+                    eprintln!("🔌 Embedded icon for {} ({} bytes)", plugin_name_str, byte_count);
+                    quote! { Some(#base64_data.to_string()) }
                 }
-                icon_base64 = Some(general_purpose::STANDARD.encode(bytes));
-            }
-            Err(e) => {
-                return syn::Error::new_spanned(
-                    &input.ident,
-                    format!("🔌 Failed to read icon at '{}': {}", icon_path.display(), e)
-                ).to_compile_error().into();
+                Err(e) => {
+                    return Err(syn::Error::new_spanned(
+                        &input.ident,
+                        format!("🔌 Failed to read icon at '{}': {}", icon_path.display(), e)
+                    ));
+                }
             }
         }
-    }
-
-    let icon_data_tokens = match icon_base64 {
-        Some(data) => quote! { Some(#data.to_string()) },
-        None => quote! { None },
+    } else {
+        quote! { None }
     };
 
     let perms = attr.permissions.iter().map(|p| {
@@ -128,7 +167,7 @@ pub fn vers_plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! { vers_shared::CapabilityType::#ident }
     });
 
-    let default_tags = match attr.service_type.as_str() {
+    let mut default_tags = match attr.service_type.as_str() {
         "Reasoning" => vec!["#MIND", "#LLM"],
         "Memory" => vec!["#MEMORY"],
         "Skill" | "Action" => vec!["#TOOL"],
@@ -136,48 +175,72 @@ pub fn vers_plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
         "Communication" => vec!["#ADAPTER"],
         _ => vec![],
     };
+
+    // Merge user-specified tags
+    let user_tags: Vec<&str> = attr.tags.iter().map(|s| s.as_str()).collect();
+    default_tags.extend(user_tags);
+
     let tags_tokens = default_tags.iter().map(|t| quote! { #t.to_string() });
 
-    // Auto-implement PluginCast based on capabilities
+    // Generate downcast implementations based on capabilities
     let mut cast_methods = quote! {};
     for cap in &attr.capabilities {
         match cap.as_str() {
-            "Reasoning" => {
-                cast_methods = quote! {
-                    #cast_methods
-                    fn as_reasoning(&self) -> Option<&dyn vers_shared::ReasoningEngine> { Some(self) }
-                };
-            },
-            "Memory" => {
-                cast_methods = quote! {
-                    #cast_methods
-                    fn as_memory(&self) -> Option<&dyn vers_shared::MemoryProvider> { Some(self) }
-                };
-            },
-            "Communication" => {
-                cast_methods = quote! {
-                    #cast_methods
-                    fn as_communication(&self) -> Option<&dyn vers_shared::CommunicationAdapter> { Some(self) }
-                };
-            },
-            "Tool" => {
-                cast_methods = quote! {
-                    #cast_methods
-                    fn as_tool(&self) -> Option<&dyn vers_shared::Tool> { Some(self) }
-                };
-            },
-            "Web" => {
-                cast_methods = quote! {
-                    #cast_methods
-                    fn as_web(&self) -> Option<&dyn vers_shared::WebPlugin> { Some(self) }
-                };
-            },
-            _ => {} // Vision, HAL, etc. do not have specific traits yet
+            "Reasoning" => cast_methods.extend(quote! { fn as_reasoning(&self) -> Option<&dyn vers_shared::ReasoningEngine> { Some(self) } }),
+            "Memory" => cast_methods.extend(quote! { fn as_memory(&self) -> Option<&dyn vers_shared::MemoryProvider> { Some(self) } }),
+            "Communication" => cast_methods.extend(quote! { fn as_communication(&self) -> Option<&dyn vers_shared::CommunicationAdapter> { Some(self) } }),
+            "Tool" => cast_methods.extend(quote! { fn as_tool(&self) -> Option<&dyn vers_shared::Tool> { Some(self) } }),
+            "Web" => cast_methods.extend(quote! { fn as_web(&self) -> Option<&dyn vers_shared::WebPlugin> { Some(self) } }),
+            _ => {}
         }
     }
 
-    let expanded = quote! {
+    let category_ident = if attr.category.is_empty() {
+        // Inference logic
+        match attr.service_type.as_str() {
+            "Reasoning" => quote! { vers_shared::PluginCategory::Agent },
+            "Memory" => quote! { vers_shared::PluginCategory::Memory },
+            "Tool" | "HAL" | "Communication" => quote! { vers_shared::PluginCategory::Tool },
+            _ => quote! { vers_shared::PluginCategory::Other },
+        }
+    } else {
+        let cat = quote::format_ident!("{}", attr.category);
+        quote! { vers_shared::PluginCategory::#cat }
+    };
+
+    Ok(quote! {
         #input
+
+        impl #name {
+            pub const PLUGIN_ID: &'static str = #plugin_name_str;
+
+            pub fn factory() -> std::sync::Arc<dyn vers_shared::PluginFactory> {
+                std::sync::Arc::new(#factory_name)
+            }
+
+            fn auto_manifest(&self) -> vers_shared::PluginManifest {
+                vers_shared::PluginManifest {
+                    id: Self::PLUGIN_ID.to_string(),
+                    name: #plugin_name_str.to_string(),
+                    description: #description_str.to_string(),
+                    version: #version_str.to_string(),
+                    category: #category_ident,
+                    service_type: vers_shared::ServiceType::#service_type_ident,
+                    tags: vec![ #(#tags_tokens),* ],
+                    is_active: true,
+                    is_configured: true,
+                    required_config_keys: vec![ #(#config_keys_tokens),* ],
+                    action_icon: #action_icon_token,
+                    action_target: None,
+                    icon_data: #icon_data_tokens,
+                    magic_seal: 0x56455253, // VERS
+                    sdk_version: env!("CARGO_PKG_VERSION").to_string(),
+                    required_permissions: vec![ #(#perms),* ],
+                    provided_capabilities: vec![ #(#caps),* ],
+                    provided_tools: vec![],
+                }
+            }
+        }
 
         impl vers_shared::PluginCast for #name {
             fn as_any(&self) -> &dyn std::any::Any { self }
@@ -198,40 +261,10 @@ pub fn vers_plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
 
-        impl #name {
-            pub fn factory() -> std::sync::Arc<dyn vers_shared::PluginFactory> {
-                std::sync::Arc::new(#factory_name)
-            }
-
-            fn auto_manifest(&self) -> vers_shared::PluginManifest {
-                vers_shared::PluginManifest {
-                    id: #plugin_name_str.to_string(),
-                    name: #plugin_name_str.to_string(),
-                    description: #description_str.to_string(),
-                    version: #version_str.to_string(),
-                    service_type: vers_shared::ServiceType::#service_type_ident,
-                    tags: vec![ #(#tags_tokens),* ],
-                    is_active: true,
-                    is_configured: true,
-                    required_config_keys: vec![ #(#config_keys_tokens),* ],
-                    action_icon: #action_icon_token,
-                    action_target: None,
-                    icon_data: #icon_data_tokens,
-                    magic_seal: 0x56455253, // VERS
-                    sdk_version: env!("CARGO_PKG_VERSION").to_string(),
-                    required_permissions: vec![ #(#perms),* ],
-                    provided_capabilities: vec![ #(#caps),* ],
-                    provided_tools: vec![],
-                }
-            }
-        }
-
         vers_shared::inventory::submit! {
             vers_shared::PluginRegistrar {
                 factory: #name::factory,
             }
         }
-    };
-
-    TokenStream::from(expanded)
+    })
 }

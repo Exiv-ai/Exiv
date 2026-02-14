@@ -1,6 +1,7 @@
 import { AgentMetadata, PluginManifest } from '../types';
 
-const API_BASE = '/api';
+const API_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/api`;
+const API_BASE = API_URL.endsWith('/api') ? API_URL : `${API_URL}/api`;
 
 export const api = {
   async getAgents(): Promise<AgentMetadata[]> {
@@ -39,7 +40,7 @@ export const api = {
     if (!res.ok) throw new Error(`Failed to update plugin config: ${res.statusText}`);
   },
 
-  async updateAgent(id: string, payload: { metadata: Record<string, string> }): Promise<void> {
+  async updateAgent(id: string, payload: { default_engine_id?: string, metadata: Record<string, string> }): Promise<void> {
     const res = await fetch(`${API_BASE}/agents/${id}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -55,5 +56,47 @@ export const api = {
       body: JSON.stringify({ permission })
     });
     if (!res.ok) throw new Error(`Failed to grant permission: ${res.statusText}`);
+  },
+
+  async postEvent(eventData: any): Promise<void> {
+    const res = await fetch(`${API_BASE}/events/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(eventData)
+    });
+    if (!res.ok) throw new Error(`Failed to post event: ${res.statusText}`);
+  },
+
+  async post(path: string, payload: any): Promise<void> {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(`Failed to post to ${path}: ${res.statusText}`);
+  },
+
+  async getPendingPermissions(): Promise<any[]> {
+    const res = await fetch(`${API_BASE}/permissions/pending`);
+    if (!res.ok) throw new Error(`Failed to fetch pending permissions: ${res.statusText}`);
+    return res.json();
+  },
+
+  async approvePermission(requestId: string, approvedBy: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/permissions/${requestId}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved_by: approvedBy })
+    });
+    if (!res.ok) throw new Error(`Failed to approve permission: ${res.statusText}`);
+  },
+
+  async denyPermission(requestId: string, approvedBy: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/permissions/${requestId}/deny`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved_by: approvedBy })
+    });
+    if (!res.ok) throw new Error(`Failed to deny permission: ${res.statusText}`);
   }
 };

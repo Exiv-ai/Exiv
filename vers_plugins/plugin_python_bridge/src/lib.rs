@@ -1,38 +1,52 @@
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, oneshot};
 use tokio::process::{Command, Child};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::time::{timeout, Duration};
 use std::process::Stdio;
+use std::collections::HashMap;
 use vers_shared::{
     AgentMetadata, Plugin, PluginConfig, ReasoningEngine, VersMessage, PluginRuntimeContext, 
-    vers_plugin, NetworkCapability
+    vers_plugin, NetworkCapability, Tool
 };
 use tracing::info;
 
 #[vers_plugin(
     name = "bridge.python",
     kind = "Reasoning",
-    description = "Universal Python Bridge using subprocess communication. Supports PyTorch/TensorFlow natively.",
-    version = "0.2.0",
-    permissions = ["NetworkAccess", "FileRead"],
-    capabilities = ["Reasoning"]
+    description = "Universal Python Bridge with asynchronous event streaming. Supports real-time capabilities like Gaze Tracking.",
+    version = "0.3.0",
+    category = "Tool",
+    permissions = ["NetworkAccess", "FileRead", "ProcessExecution", "VisionRead"],
+    tags = ["#TOOL", "#ADAPTER"],
+    capabilities = ["Reasoning", "Tool", "Web"]
 )]
+#[derive(Clone)]
 pub struct PythonBridgePlugin {
-    id: String,
+    instance_id: String,
     script_path: String,
-    process: Arc<RwLock<Option<PythonProcess>>>,
-    dynamic_manifest: Arc<RwLock<Option<vers_shared::PluginManifest>>>,
-    allowed_permissions: Arc<RwLock<Vec<vers_shared::Permission>>>,
-    http_client: Arc<RwLock<Option<Arc<dyn NetworkCapability>>>>,
+    state: Arc<RwLock<PythonBridgeState>>,
 }
 
-struct PythonProcess {
+struct PythonBridgeState {
+    process: Option<PythonProcessHandle>,
+    dynamic_manifest: Option<vers_shared::PluginManifest>,
+    allowed_permissions: Vec<vers_shared::Permission>,
+    http_client: Option<Arc<dyn NetworkCapability>>,
+    pending_calls: HashMap<i64, oneshot::Sender<anyhow::Result<serde_json::Value>>>,
+    next_call_id: i64,
+    event_tx: Option<tokio::sync::mpsc::Sender<vers_shared::VersEventData>>,
+    restart_count: u32,
+    last_restart: Option<std::time::Instant>,
+}
+
+struct PythonProcessHandle {
     #[allow(dead_code)]
     child: Child,
     stdin: tokio::process::ChildStdin,
-    stdout: BufReader<tokio::process::ChildStdout>,
+    #[allow(dead_code)]
+    reader_handle: tokio::task::JoinHandle<()>,
 }
 
 impl PythonBridgePlugin {
@@ -40,29 +54,79 @@ impl PythonBridgePlugin {
         let script_path = config.config_values.get("script_path")
             .cloned()
             .unwrap_or_else(|| "scripts/bridge_main.py".to_string());
-        
+
+        // Security: prevent path traversal attacks
+        if script_path.contains("..") {
+            return Err(anyhow::anyhow!("Script path must not contain '..': {}", script_path));
+        }
+        let path = std::path::Path::new(&script_path);
+        if path.is_absolute() || !path.starts_with("scripts/") {
+            return Err(anyhow::anyhow!("Script path must be relative and within 'scripts/' directory: {}", script_path));
+        }
+
         Ok(Self {
-            id: config.id,
+            instance_id: config.id,
             script_path,
-            process: Arc::new(RwLock::new(None)),
-            dynamic_manifest: Arc::new(RwLock::new(None)),
-            allowed_permissions: Arc::new(RwLock::new(vec![])),
-            http_client: Arc::new(RwLock::new(None)),
+            state: Arc::new(RwLock::new(PythonBridgeState {
+                process: None,
+                dynamic_manifest: None,
+                allowed_permissions: vec![],
+                http_client: None,
+                pending_calls: HashMap::new(),
+                next_call_id: 1,
+                event_tx: None,
+                restart_count: 0,
+                last_restart: None,
+            })),
         })
     }
 
+    /// Low-level send without checking process (avoids recursion)
+    async fn send_raw(stdin: &mut tokio::process::ChildStdin, id: i64, method: &str, params: serde_json::Value) -> anyhow::Result<()> {
+        let request = serde_json::json!({
+            "id": id,
+            "method": method,
+            "params": params
+        });
+        let mut line = request.to_string();
+        line.push('\n');
+        stdin.write_all(line.as_bytes()).await?;
+        stdin.flush().await?;
+        Ok(())
+    }
+
+    const MAX_RESTART_ATTEMPTS: u32 = 3;
+    const RESTART_COOLDOWN_SECS: u64 = 5;
+
     async fn ensure_process(&self) -> anyhow::Result<()> {
-        // 1. Check if process exists (Read Lock)
         {
-            let lock = self.process.read().await;
-            if lock.is_some() {
+            let lock = self.state.read().await;
+            if lock.process.is_some() {
                 return Ok(());
             }
         }
 
-        // 2. Spawn process (Write Lock)
-        let mut lock = self.process.write().await;
-        if lock.is_none() {
+        let mut state = self.state.write().await;
+        if state.process.is_none() {
+            // Check restart limits
+            if state.restart_count >= Self::MAX_RESTART_ATTEMPTS {
+                return Err(anyhow::anyhow!("Max restart attempts ({}) reached", Self::MAX_RESTART_ATTEMPTS));
+            }
+            if let Some(last) = state.last_restart {
+                if last.elapsed().as_secs() < Self::RESTART_COOLDOWN_SECS {
+                    return Err(anyhow::anyhow!("Restart cooldown active ({}s remaining)",
+                        Self::RESTART_COOLDOWN_SECS - last.elapsed().as_secs()));
+                }
+            }
+
+            // Update restart tracking
+            if state.restart_count > 0 {
+                info!("🔄 Restarting Python bridge (attempt {}/{})", state.restart_count + 1, Self::MAX_RESTART_ATTEMPTS);
+            }
+            state.restart_count += 1;
+            state.last_restart = Some(std::time::Instant::now());
+
+            let event_tx = state.event_tx.clone();
             info!("🐍 Spawning Python subprocess: scripts/bridge_runtime.py with user script: {}", self.script_path);
             
             let mut child = Command::new("python3")
@@ -73,23 +137,96 @@ impl PythonBridgePlugin {
                 .stderr(Stdio::inherit())
                 .spawn()?;
 
-            let stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("Failed to open stdin"))?;
+            let mut stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("Failed to open stdin"))?;
             let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("Failed to open stdout"))?;
             
-            let mut proc = PythonProcess {
-                child,
-                stdin,
-                stdout: BufReader::new(stdout),
-            };
+            // Start background reader with enhanced error handling
+            let state_weak = self.state.clone();
+            let reader_handle = tokio::spawn(async move {
+                let mut reader = BufReader::new(stdout).lines();
 
-            // 3. Load manifest using the RAW process before storing it (to avoid recursion)
-            info!("🐍 Loading dynamic manifest from Python...");
-            let manifest_json = timeout(
-                Duration::from_secs(5),
-                Self::communicate_raw(&mut proc.stdin, &mut proc.stdout, "get_manifest", serde_json::Value::Null)
-            ).await??;
+                loop {
+                    match reader.next_line().await {
+                        Ok(Some(line)) => {
+                            // Process line (existing event/RPC handling)
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+                                // Handle event messages
+                                if val.get("type").and_then(|v| v.as_str()) == Some("event") {
+                                    if let (Some(ev_type), Some(ev_data)) = (val.get("event_type").and_then(|v| v.as_str()), val.get("data")) {
+                                        if let Some(tx) = &event_tx {
+                                            let data = match ev_type {
+                                                "GazeUpdated" => {
+                                                    if let Ok(gaze) = serde_json::from_value::<vers_shared::GazeData>(ev_data.clone()) {
+                                                        Some(vers_shared::VersEventData::GazeUpdated(gaze))
+                                                    } else { None }
+                                                }
+                                                "SystemNotification" => Some(vers_shared::VersEventData::SystemNotification(ev_data.as_str().unwrap_or_default().to_string())),
+                                                _ => None
+                                            };
+                                            if let Some(d) = data {
+                                                let _ = tx.send(d).await;
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
+
+                                // Handle RPC response messages
+                                if let Some(id) = val.get("id").and_then(|v| v.as_i64()) {
+                                    let mut lock = state_weak.write().await;
+                                    if let Some(tx) = lock.pending_calls.remove(&id) {
+                                        if let Some(err) = val.get("error") {
+                                            let _ = tx.send(Err(anyhow::anyhow!("Python Error: {}", err)));
+                                        } else {
+                                            let _ = tx.send(Ok(val.get("result").cloned().unwrap_or(serde_json::Value::Null)));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            tracing::warn!("🔥 Python bridge reader received EOF - process terminated");
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::error!("🔥 Python bridge reader error: {} - terminating", e);
+                            break;
+                        }
+                    }
+                }
+
+                // Reader exited - cleanup and mark for restart
+                tracing::error!("🔥 Python bridge reader task exited, cleaning up");
+                let mut state = state_weak.write().await;
+
+                // Mark process as dead (will auto-restart on next call via ensure_process)
+                state.process = None;
+
+                // Fail all pending calls
+                for (_, tx) in state.pending_calls.drain() {
+                    let _ = tx.send(Err(anyhow::anyhow!("Python process crashed")));
+                }
+
+                tracing::info!("🔄 Python bridge will auto-restart on next operation");
+            });
+
+            // Initial Handshake (Get Manifest) without using call_python (recursive)
+            let id = state.next_call_id;
+            state.next_call_id += 1;
+            let (tx, rx) = oneshot::channel();
+            state.pending_calls.insert(id, tx);
             
+            Self::send_raw(&mut stdin, id, "get_manifest", serde_json::Value::Null).await?;
+            
+            drop(state); // Release lock for receiver task to work
+            
+            let manifest_res = timeout(Duration::from_secs(5), rx).await?;
+            let manifest_json: serde_json::Value = manifest_res??;
+            
+            let mut state = self.state.write().await;
             let mut manifest = self.auto_manifest();
+            
+            // 📝 Python 側のマニフェストで上書き
             if let Some(id) = manifest_json.get("id").and_then(|v| v.as_str()) {
                 manifest.id = id.to_string();
             }
@@ -103,71 +240,103 @@ impl PythonBridgePlugin {
                 manifest.version = ver.to_string();
             }
             
-            info!("✅ Python Manifest loaded: {}", manifest.name);
-            let mut dynamic = self.dynamic_manifest.write().await;
-            *dynamic = Some(manifest);
+            // 📂 カテゴリとサービスタイプの動的パース
+            if let Some(cat_val) = manifest_json.get("category") {
+                if let Ok(cat) = serde_json::from_value(cat_val.clone()) {
+                    manifest.category = cat;
+                }
+            }
+            if let Some(st_val) = manifest_json.get("service_type") {
+                if let Ok(st) = serde_json::from_value(st_val.clone()) {
+                    manifest.service_type = st;
+                }
+            }
 
-            *lock = Some(proc);
+            // 🛠️ 能力と権限の継承
+            if let Some(caps_val) = manifest_json.get("capabilities").and_then(|v| v.as_array()) {
+                let mut caps = Vec::new();
+                for c in caps_val {
+                    if let Ok(cap) = serde_json::from_value(c.clone()) {
+                        caps.push(cap);
+                    }
+                }
+                if !caps.is_empty() {
+                    manifest.provided_capabilities = caps;
+                }
+            }
+
+            if let Some(perms_val) = manifest_json.get("required_permissions").and_then(|v| v.as_array()) {
+                let mut perms = Vec::new();
+                for p in perms_val {
+                    if let Ok(perm) = serde_json::from_value(p.clone()) {
+                        perms.push(perm);
+                    }
+                }
+                if !perms.is_empty() {
+                    manifest.required_permissions = perms;
+                }
+            }
+
+            // 🧰 ツールとアクション情報の継承
+            if let Some(tools_val) = manifest_json.get("provided_tools").and_then(|v| v.as_array()) {
+                manifest.provided_tools = tools_val.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+            }
+            if let Some(icon) = manifest_json.get("action_icon").and_then(|v| v.as_str()) {
+                manifest.action_icon = Some(icon.to_string());
+            }
+            if let Some(target) = manifest_json.get("action_target").and_then(|v| v.as_str()) {
+                manifest.action_target = Some(target.to_string());
+            }
+
+            // 🏷️ タグの統合と #PYTHON の強制付与
+            if let Some(tags_val) = manifest_json.get("tags").and_then(|v| v.as_array()) {
+                for t in tags_val {
+                    if let Some(t_str) = t.as_str() {
+                        let t_str = if t_str.starts_with('#') { t_str.to_string() } else { format!("#{}", t_str) };
+                        if !manifest.tags.contains(&t_str) {
+                            manifest.tags.push(t_str);
+                        }
+                    }
+                }
+            }
+            if !manifest.tags.contains(&"#PYTHON".to_string()) {
+                manifest.tags.push("#PYTHON".to_string());
+            }
+            
+            state.dynamic_manifest = Some(manifest);
+            state.process = Some(PythonProcessHandle { child, stdin, reader_handle });
         }
         Ok(())
     }
 
-    async fn communicate_raw(
-        stdin: &mut tokio::process::ChildStdin,
-        stdout: &mut BufReader<tokio::process::ChildStdout>,
-        method: &str,
-        params: serde_json::Value
-    ) -> anyhow::Result<serde_json::Value> {
-        let request = serde_json::json!({
-            "method": method,
-            "params": params
-        });
-
-        let mut line = request.to_string();
-        line.push('\n');
-
-        stdin.write_all(line.as_bytes()).await?;
-        stdin.flush().await?;
-
-        let mut response_line = String::new();
-        if stdout.read_line(&mut response_line).await? == 0 {
-            return Err(anyhow::anyhow!("Python process disconnected"));
-        }
-
-        let response: serde_json::Value = serde_json::from_str(&response_line)?;
-        if let Some(error) = response.get("error") {
-            return Err(anyhow::anyhow!("Python Error: {}", error));
-        }
-
-        Ok(response.get("result").cloned().unwrap_or(serde_json::Value::Null))
-    }
-
-    async fn call_python(&self, method: &str, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-        self.ensure_process().await?;
+    pub async fn call_python(&self, method: &str, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        self.ensure_process().await?; 
         
-        let mut lock = self.process.write().await;
-        if let Some(proc) = lock.as_mut() {
-            let result = timeout(
-                Duration::from_secs(10),
-                Self::communicate_raw(&mut proc.stdin, &mut proc.stdout, method, params)
-            ).await;
+        let (id, tx) = {
+            let mut state = self.state.write().await;
+            let id = state.next_call_id;
+            state.next_call_id += 1;
+            let (tx, rx) = oneshot::channel();
+            state.pending_calls.insert(id, tx);
+            (id, rx)
+        };
 
-            match result {
-                Ok(Ok(val)) => Ok(val),
-                Ok(Err(e)) => {
-                    info!("❌ Python Bridge communication error: {}. Resetting process.", e);
-                    *lock = None;
-                    Err(e)
-                }
-                Err(_) => {
-                    info!("⏳ Python Bridge call timed out. Resetting process.");
-                    let _ = proc.child.kill().await;
-                    *lock = None;
-                    Err(anyhow::anyhow!("Python Bridge timeout"))
-                }
+        {
+            let mut state = self.state.write().await;
+            if let Some(proc) = state.process.as_mut() {
+                Self::send_raw(&mut proc.stdin, id, method, params).await?;
+            } else {
+                return Err(anyhow::anyhow!("Python process not running"));
             }
-        } else {
-            Err(anyhow::anyhow!("Python process not available"))
+        }
+
+        match timeout(Duration::from_secs(10), tx).await {
+            Ok(res) => res?,
+            Err(_) => {
+                let mut state = self.state.write().await;
+                state.pending_calls.remove(&id);
+                Err(anyhow::anyhow!("Python call timed out"))
+            }
         }
     }
 }
@@ -175,8 +344,8 @@ impl PythonBridgePlugin {
 #[async_trait]
 impl Plugin for PythonBridgePlugin {
     fn manifest(&self) -> vers_shared::PluginManifest {
-        if let Ok(dynamic) = self.dynamic_manifest.try_read() {
-            if let Some(m) = &*dynamic {
+        if let Ok(state) = self.state.try_read() {
+            if let Some(m) = &state.dynamic_manifest {
                 return m.clone();
             }
         }
@@ -189,99 +358,158 @@ impl Plugin for PythonBridgePlugin {
         network: Option<Arc<dyn NetworkCapability>>,
     ) -> anyhow::Result<()> {
         {
-            let mut perms = self.allowed_permissions.write().await;
-            *perms = context.effective_permissions;
+            let mut state = self.state.write().await;
+            state.allowed_permissions = context.effective_permissions;
+            state.http_client = network;
+            state.event_tx = Some(context.event_tx);
         }
-        {
-            let mut client = self.http_client.write().await;
-            *client = network;
+
+        // 🐍 Perform handshake immediately to load dynamic manifest
+        if let Err(e) = self.ensure_process().await {
+            tracing::error!("❌ Python Bridge: Failed to initialize subprocess for {}: {}", self.instance_id, e);
+        } else {
+            info!("🐍 Python Bridge: Subprocess handshake complete for {}", self.instance_id);
         }
+        
         Ok(())
     }
 
-    async fn on_event(
-        &self,
-        event: &vers_shared::VersEvent,
-    ) -> anyhow::Result<Option<vers_shared::VersEvent>> {
-        match event {
-            vers_shared::VersEvent::ThoughtRequested {
-                agent,
-                engine_id,
-                message,
-                context,
-            } => {
-                if engine_id != "bridge.python" {
-                    return Ok(None);
-                }
-
-                // セキュリティチェック：NetworkAccessが必要なスクリプトで権限がない場合
-                let has_network = {
-                    let client = self.http_client.read().await;
-                    client.is_some()
-                };
-
-                // マニフェストでNetworkAccessを要求しているか確認
-                let needs_network = if let Ok(dynamic) = self.dynamic_manifest.try_read() {
-                    dynamic.as_ref().map(|m| m.required_permissions.contains(&vers_shared::Permission::NetworkAccess)).unwrap_or(false)
-                } else {
-                    false
-                };
-
-                if needs_network && !has_network {
-                    info!("🛡️ Python Bridge: Permission NetworkAccess is required but not granted. Requesting...");
-                    return Ok(Some(vers_shared::VersEvent::PermissionRequested {
-                        plugin_id: "bridge.python".to_string(),
-                        permission: vers_shared::Permission::NetworkAccess,
-                        reason: "Python script 'analyst' needs network to fetch external data.".to_string(),
-                    }));
-                }
-
-                let content = self.think(agent, message, context.clone()).await?;
-                return Ok(Some(vers_shared::VersEvent::ThoughtResponse {
-                    agent_id: agent.id.clone(),
-                    content,
-                    source_message_id: message.id.clone(),
-                }));
+    async fn on_event(&self, event: &vers_shared::VersEvent) -> anyhow::Result<Option<vers_shared::VersEventData>> {
+        if let vers_shared::VersEventData::ThoughtRequested { agent, engine_id, message, context } = &event.data {
+            let manifest = self.manifest();
+            if engine_id != &self.instance_id && engine_id != "bridge.python" && engine_id != &manifest.id {
+                return Ok(None);
             }
-            _ => {}
+            let content = self.think(agent, message, context.clone()).await?;
+            return Ok(Some(vers_shared::VersEventData::ThoughtResponse {
+                agent_id: agent.id.clone(),
+                engine_id: manifest.id.clone(),
+                content,
+                source_message_id: message.id.clone(),
+            }));
         }
         Ok(None)
     }
+}
 
-    async fn on_capability_injected(
+impl vers_shared::WebPlugin for PythonBridgePlugin {
+    fn register_routes(
         &self,
-        capability: vers_shared::PluginCapability,
-    ) -> anyhow::Result<()> {
-        match capability {
-            vers_shared::PluginCapability::Network(net) => {
-                let mut client = self.http_client.write().await;
-                *client = Some(net);
-                info!("💉 Python Bridge: NetworkCapability injected live.");
-            }
-        }
-        Ok(())
+        router: axum::Router<Arc<dyn std::any::Any + Send + Sync>>,
+    ) -> axum::Router<Arc<dyn std::any::Any + Send + Sync>> {
+        let instance_id = self.instance_id.clone();
+        let plugin = self.clone();
+        
+        router.route(
+            &format!("/api/plugin/{}/action/:command", instance_id),
+            axum::routing::post(move |
+                axum::extract::Path(command): axum::extract::Path<String>,
+                body: Option<axum::Json<serde_json::Value>>
+            | {
+                let plugin = plugin.clone();
+                let _body_val = body.map(|b| b.0).unwrap_or(serde_json::Value::Null);
+                async move {
+                    match plugin.call_python(&format!("on_action_{}", command), serde_json::Value::Null).await {
+                        Ok(res) => axum::Json(res),
+                        Err(e) => {
+                            tracing::error!("❌ Python Bridge Action Error: {}", e);
+                            axum::Json(serde_json::json!({ "error": e.to_string() }))
+                        }
+                    }
+                }
+            }),
+        )
     }
 }
 
 #[async_trait]
 impl ReasoningEngine for PythonBridgePlugin {
-    fn name(&self) -> &str {
-        "PythonSubprocessBridge"
-    }
-
-    async fn think(
-        &self,
-        agent: &AgentMetadata,
-        message: &VersMessage,
-        context: Vec<VersMessage>,
-    ) -> anyhow::Result<String> {
-        let params = serde_json::json!({
-            "agent": agent,
-            "message": message,
-            "context": context
-        });
-
+    fn name(&self) -> &str { "PythonSubprocessBridge" }
+    async fn think(&self, agent: &AgentMetadata, message: &VersMessage, context: Vec<VersMessage>) -> anyhow::Result<String> {
+        let params = serde_json::json!({ "agent": agent, "message": message, "context": context });
         let result = self.call_python("think", params).await?;
         Ok(result.as_str().unwrap_or_default().to_string())
+    }
+}
+
+#[async_trait]
+impl Tool for PythonBridgePlugin {
+    fn name(&self) -> &str { "PythonBridgeTool" }
+    fn description(&self) -> &str { "Delegates tool execution to Python script." }
+    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        self.call_python("execute", args).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn test_restart_rate_limiting() {
+        let mut config_values = HashMap::new();
+        config_values.insert("script_path".to_string(), "scripts/test.py".to_string());
+
+        let config = PluginConfig {
+            id: "test.bridge".to_string(),
+            config_values,
+        };
+
+        let plugin = PythonBridgePlugin::new_plugin(config).await.unwrap();
+
+        // Simulate max restart attempts reached
+        {
+            let mut state = plugin.state.write().await;
+            state.restart_count = PythonBridgePlugin::MAX_RESTART_ATTEMPTS;
+        }
+
+        // Next ensure_process should fail due to max attempts
+        let result = plugin.ensure_process().await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Max restart attempts"));
+    }
+
+    #[tokio::test]
+    async fn test_restart_cooldown() {
+        let mut config_values = HashMap::new();
+        config_values.insert("script_path".to_string(), "scripts/test.py".to_string());
+
+        let config = PluginConfig {
+            id: "test.bridge2".to_string(),
+            config_values,
+        };
+
+        let plugin = PythonBridgePlugin::new_plugin(config).await.unwrap();
+
+        // Simulate recent restart
+        {
+            let mut state = plugin.state.write().await;
+            state.restart_count = 1;
+            state.last_restart = Some(std::time::Instant::now());
+        }
+
+        // Immediate restart should fail due to cooldown
+        let result = plugin.ensure_process().await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cooldown"));
+    }
+
+    #[tokio::test]
+    async fn test_initial_startup_allowed() {
+        let mut config_values = HashMap::new();
+        config_values.insert("script_path".to_string(), "scripts/test.py".to_string());
+
+        let config = PluginConfig {
+            id: "test.bridge3".to_string(),
+            config_values,
+        };
+
+        let plugin = PythonBridgePlugin::new_plugin(config).await.unwrap();
+
+        // Initial startup (restart_count = 0) should not be blocked
+        let state = plugin.state.read().await;
+        assert_eq!(state.restart_count, 0);
+        assert!(state.last_restart.is_none());
     }
 }

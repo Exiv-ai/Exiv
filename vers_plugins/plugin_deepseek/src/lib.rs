@@ -13,31 +13,39 @@ use vers_shared::{
     kind = "Reasoning",
     description = "Advanced reasoning using DeepSeek API.",
     version = "0.1.0",
+    category = "Agent",
     icon = "assets/icon.svg",
     action_icon = "Settings",
-    config_keys = ["api_key", "model_id"],
+    config_keys = ["api_key", "model_id", "api_url"],
     permissions = ["NetworkAccess"],
     capabilities = ["Reasoning", "Web"]
 )]
 pub struct DeepSeekPlugin {
-    id: String,
-    api_key: Arc<RwLock<String>>,
-    model_id: Arc<RwLock<String>>,
-    allowed_permissions: Arc<RwLock<Vec<Permission>>>,
-    http_client: Arc<RwLock<Option<Arc<dyn NetworkCapability>>>>,
+    state: Arc<RwLock<DeepSeekState>>,
+}
+
+struct DeepSeekState {
+    api_key: String,
+    model_id: String,
+    api_url: String,
+    allowed_permissions: Vec<Permission>,
+    http_client: Option<Arc<dyn NetworkCapability>>,
 }
 
 impl DeepSeekPlugin {
     pub async fn new_plugin(config: PluginConfig) -> anyhow::Result<Self> {
         let api_key = config.config_values.get("api_key").cloned().unwrap_or_default();
         let model_id = config.config_values.get("model_id").cloned().unwrap_or_else(|| "deepseek-chat".to_string());
+        let api_url = config.config_values.get("api_url").cloned().unwrap_or_else(|| "https://api.deepseek.com/chat/completions".to_string());
         
         Ok(Self {
-            id: config.id,
-            api_key: Arc::new(RwLock::new(api_key)),
-            model_id: Arc::new(RwLock::new(model_id)),
-            allowed_permissions: Arc::new(RwLock::new(vec![])),
-            http_client: Arc::new(RwLock::new(None)),
+            state: Arc::new(RwLock::new(DeepSeekState {
+                api_key,
+                model_id,
+                api_url,
+                allowed_permissions: vec![],
+                http_client: None,
+            })),
         })
     }
 }
@@ -53,49 +61,50 @@ impl Plugin for DeepSeekPlugin {
         context: PluginRuntimeContext,
         network: Option<Arc<dyn NetworkCapability>>,
     ) -> anyhow::Result<()> {
-        {
-            let mut perms = self.allowed_permissions.write().await;
-            *perms = context.effective_permissions;
+        if network.is_none() {
+            tracing::warn!("🔌 DeepSeek Plugin: NetworkCapability NOT provided. API calls will fail until permission is granted.");
         }
-        {
-            let mut client = self.http_client.write().await;
-            *client = network;
-        }
+        
+        let mut state = self.state.write().await;
+        state.allowed_permissions = context.effective_permissions;
+        state.http_client = network;
         Ok(())
     }
 
     async fn on_event(
         &self,
         event: &vers_shared::VersEvent,
-    ) -> anyhow::Result<Option<vers_shared::VersEvent>> {
-        match event {
-            vers_shared::VersEvent::ThoughtRequested {
+    ) -> anyhow::Result<Option<vers_shared::VersEventData>> {
+        match &event.data {
+            vers_shared::VersEventData::ThoughtRequested {
                 agent,
                 engine_id,
                 message,
                 context,
             } => {
-                if engine_id != "mind.deepseek" {
+                if engine_id != Self::PLUGIN_ID {
                     return Ok(None);
                 }
                 let content = self.think(agent, message, context.clone()).await?;
-                return Ok(Some(vers_shared::VersEvent::ThoughtResponse {
+                return Ok(Some(vers_shared::VersEventData::ThoughtResponse {
                     agent_id: agent.id.clone(),
                     content,
                     source_message_id: message.id.clone(),
                 }));
             }
-            vers_shared::VersEvent::ConfigUpdated { plugin_id, config } => {
-                if plugin_id == "mind.deepseek" {
+            vers_shared::VersEventData::ConfigUpdated { plugin_id, config } => {
+                if plugin_id == Self::PLUGIN_ID {
+                    let mut state = self.state.write().await;
                     if let Some(key) = config.get("api_key") {
-                        let mut api_key = self.api_key.write().await;
-                        *api_key = key.clone();
+                        state.api_key = key.clone();
                     }
                     if let Some(model) = config.get("model_id") {
-                        let mut model_id = self.model_id.write().await;
-                        *model_id = model.clone();
+                        state.model_id = model.clone();
                     }
-                    println!("🔌 DeepSeek Plugin configuration hot-reloaded.");
+                    if let Some(url) = config.get("api_url") {
+                        state.api_url = url.clone();
+                    }
+                    tracing::info!("🔌 DeepSeek Plugin configuration hot-reloaded.");
                 }
             }
             _ => {}
@@ -109,9 +118,9 @@ impl Plugin for DeepSeekPlugin {
     ) -> anyhow::Result<()> {
         match capability {
             vers_shared::PluginCapability::Network(net) => {
-                let mut client = self.http_client.write().await;
-                *client = Some(net);
-                println!("💉 DeepSeek Plugin: NetworkCapability injected live.");
+                let mut state = self.state.write().await;
+                state.http_client = Some(net);
+                tracing::info!("💉 DeepSeek Plugin: NetworkCapability injected live.");
             }
         }
         Ok(())
@@ -147,21 +156,14 @@ impl ReasoningEngine for DeepSeekPlugin {
         message: &VersMessage,
         context: Vec<VersMessage>,
     ) -> anyhow::Result<String> {
-        let (api_key, model_id) = {
-            let key = self.api_key.read().await;
-            let model = self.model_id.read().await;
-            (key.clone(), model.clone())
-        };
+        let state = self.state.read().await;
 
-        if api_key.is_empty() {
+        if state.api_key.is_empty() {
             return Err(anyhow::anyhow!("DeepSeek API Key not configured."));
         }
 
-        let client = {
-            let client_guard = self.http_client.read().await;
-            let client_opt: &Option<Arc<dyn NetworkCapability>> = &*client_guard;
-            client_opt.clone().ok_or_else(|| anyhow::anyhow!("NetworkCapability not injected."))?
-        };
+        let client = state.http_client.clone()
+            .ok_or_else(|| anyhow::anyhow!("NetworkCapability not injected. Ensure 'NetworkAccess' permission is granted."))?;
 
         let mut messages = Vec::new();
         messages.push(serde_json::json!({
@@ -182,13 +184,13 @@ impl ReasoningEngine for DeepSeekPlugin {
 
         let req = HttpRequest {
             method: "POST".to_string(),
-            url: "https://api.deepseek.com/chat/completions".to_string(),
+            url: state.api_url.clone(),
             headers: [
-                ("Authorization".to_string(), format!("Bearer {}", api_key)),
+                ("Authorization".to_string(), format!("Bearer {}", state.api_key)),
                 ("Content-Type".to_string(), "application/json".to_string())
             ].into_iter().collect(),
             body: Some(serde_json::json!({
-                "model": model_id,
+                "model": state.model_id,
                 "messages": messages,
                 "stream": false
             }).to_string()),

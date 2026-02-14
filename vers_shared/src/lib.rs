@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::pin::Pin;
+use std::future::Future;
 use uuid::Uuid;
 
 pub use vers_macros::vers_plugin;
@@ -22,6 +24,11 @@ impl std::fmt::Display for VersId {
 
 impl VersId {
     pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    /// トレース用のIDを生成
+    pub fn new_trace_id() -> Self {
         Self(Uuid::new_v4())
     }
 
@@ -59,6 +66,7 @@ pub enum Permission {
     ProcessExecution,
     MemoryRead,
     MemoryWrite,
+    AdminAccess,
 }
 
 impl std::fmt::Display for Permission {
@@ -66,6 +74,22 @@ impl std::fmt::Display for Permission {
         write!(f, "{:?}", self)
     }
 }
+
+#[derive(Debug, thiserror::Error, Serialize, Deserialize)]
+pub enum VersError {
+    #[error("Permission denied: {0}")]
+    PermissionDenied(Permission),
+    #[error("Plugin not found: {0}")]
+    PluginNotFound(String),
+    #[error("Agent not found: {0}")]
+    AgentNotFound(String),
+    #[error("Internal error: {0}")]
+    Internal(String),
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+}
+
+pub type VersResult<T> = std::result::Result<T, VersError>;
 
 /// Kernelによって認可され、実行時に提供されるプラグインの権限・環境情報
 #[derive(Clone)]
@@ -81,6 +105,8 @@ pub trait PluginDataStore: Send + Sync {
     async fn set_json(&self, plugin_id: &str, key: &str, value: serde_json::Value) -> anyhow::Result<()>;
     /// JSON形式でデータを取得
     async fn get_json(&self, plugin_id: &str, key: &str) -> anyhow::Result<Option<serde_json::Value>>;
+    /// 指定されたプレフィックスを持つ全てのデータを取得
+    async fn get_all_json(&self, plugin_id: &str, key_prefix: &str) -> anyhow::Result<Vec<(String, serde_json::Value)>>;
 }
 
 /// SALを型安全に利用するための拡張トレイト
@@ -96,6 +122,13 @@ pub trait SALExt: PluginDataStore {
         } else {
             Ok(None)
         }
+    }
+
+    /// 時系列順にソート可能なメモリキーを生成する (Principle #4 / Guardrail #4)
+    /// 形式: mem:{agent_id}:{timestamp_nanos_padded}:{message_id}
+    fn generate_mem_key(&self, agent_id: &str, message: &VersMessage) -> String {
+        let ts = message.timestamp.timestamp_nanos_opt().unwrap_or(0);
+        format!("mem:{}:{:020}:{}", agent_id, ts, message.id)
     }
 }
 
@@ -137,12 +170,22 @@ pub enum ServiceType {
     HAL,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PluginCategory {
+    Agent,  // 対話可能な人格 (#MIND)
+    Tool,   // 機能・道具 (#TOOL)
+    Memory, // 記憶 (#MEMORY)
+    System, // システム内部 (#SYSTEM)
+    Other,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     pub id: String,
     pub name: String,
     pub description: String,
     pub version: String,
+    pub category: PluginCategory, // 追加
     pub service_type: ServiceType,
     pub tags: Vec<String>,
     pub is_active: bool,
@@ -195,6 +238,9 @@ pub enum HandAction {
     MouseClick { button: String },
     KeyPress { key: String },
     Wait { ms: u32 },
+    // New Actions for Vision-HAL Coordination
+    CaptureScreen, 
+    ClickElement { label: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -237,8 +283,8 @@ pub trait Plugin: Any + Send + Sync + PluginCast {
     }
 
     /// システムイベントの購読（デフォルトは何もしない）
-    /// 戻り値としてイベントを返すと、Kernelによって再配信される
-    async fn on_event(&self, _event: &VersEvent) -> anyhow::Result<Option<VersEvent>> {
+    /// 戻り値としてイベントデータを返すと、Kernelによって再配信される
+    async fn on_event(&self, _event: &VersEvent) -> anyhow::Result<Option<VersEventData>> {
         Ok(None)
     }
 
@@ -254,6 +300,19 @@ pub trait Plugin: Any + Send + Sync + PluginCast {
     ) -> anyhow::Result<()> {
         Ok(())
     }
+}
+
+pub enum HttpMethod {
+    Get,
+    Post,
+    Put,
+    Delete,
+}
+
+pub struct WebRoute {
+    pub path: String,
+    pub method: HttpMethod,
+    pub handler: Arc<dyn Fn(serde_json::Value) -> Pin<Box<dyn Future<Output = serde_json::Value> + Send>> + Send + Sync>,
 }
 
 pub trait WebPlugin: Plugin {
@@ -303,7 +362,7 @@ pub trait MemoryProvider: Plugin {
 
 #[async_trait]
 pub trait EventHandler: Send + Sync {
-    async fn handle(&self, event: &VersEvent) -> anyhow::Result<Option<VersEvent>>;
+    async fn handle(&self, event: &VersEvent) -> anyhow::Result<Option<VersEventData>>;
 }
 
 pub struct EventRouter {
@@ -318,16 +377,16 @@ impl EventRouter {
     pub fn on<F, Fut>(&mut self, event_type: &str, handler: F)
     where
         F: Fn(VersEvent) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = anyhow::Result<Option<VersEvent>>> + Send + 'static,
+        Fut: std::future::Future<Output = anyhow::Result<Option<VersEventData>>> + Send + 'static,
     {
         struct FuncHandler<F>(F);
         #[async_trait]
         impl<F, Fut> EventHandler for FuncHandler<F>
         where
             F: Fn(VersEvent) -> Fut + Send + Sync + 'static,
-            Fut: std::future::Future<Output = anyhow::Result<Option<VersEvent>>> + Send + 'static,
+            Fut: std::future::Future<Output = anyhow::Result<Option<VersEventData>>> + Send + 'static,
         {
-            async fn handle(&self, event: &VersEvent) -> anyhow::Result<Option<VersEvent>> {
+            async fn handle(&self, event: &VersEvent) -> anyhow::Result<Option<VersEventData>> {
                 (self.0)(event.clone()).await
             }
         }
@@ -336,8 +395,14 @@ impl EventRouter {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersEvent {
+    pub trace_id: VersId,
+    pub data: VersEventData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
-pub enum VersEvent {
+pub enum VersEventData {
     MessageReceived(VersMessage),
     VisionUpdated(ColorVisionData),
     /// プラグインからのアクション要求（権限チェック対象）
@@ -358,6 +423,16 @@ pub enum VersEvent {
         agent_id: String,
         content: String,
         source_message_id: String,
+    },
+    /// 複数プラグインによる合意形成の開始 (Prototype)
+    ConsensusRequested {
+        task: String,
+        engine_ids: Vec<String>,
+    },
+    /// 各プラグインからの合意形成用提案 (Prototype)
+    ConsensusProposal {
+        engine_id: String,
+        content: String,
     },
     /// プラグインの設定が更新された通知
     ConfigUpdated {
@@ -382,12 +457,26 @@ pub enum VersEvent {
     },
 }
 
+impl VersEvent {
+    pub fn new(data: VersEventData) -> Self {
+        Self {
+            trace_id: VersId::new_trace_id(),
+            data,
+        }
+    }
+
+    pub fn with_trace(trace_id: VersId, data: VersEventData) -> Self {
+        Self { trace_id, data }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMetadata {
     pub id: String,
     pub name: String,
     pub description: String,
     pub status: String,
+    pub default_engine_id: Option<String>,
     pub required_capabilities: Vec<CapabilityType>,
     pub plugin_bindings: Vec<VersId>,
     pub metadata: HashMap<String, String>,

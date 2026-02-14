@@ -11,6 +11,12 @@ use plugin_cursor;
 #[allow(unused_imports)]
 use plugin_deepseek;
 #[allow(unused_imports)]
-use plugin_ks2_2;
+use plugin_ks22;
+#[allow(unused_imports)]
+use plugin_moderator;
+#[allow(unused_imports)]
+use plugin_mcp;
+#[allow(unused_imports)]
+use plugin_vision;
 #[allow(unused_imports)]
 use plugin_python_bridge;

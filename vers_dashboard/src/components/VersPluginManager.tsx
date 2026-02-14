@@ -1,10 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Puzzle, Shield, CheckCircle2, AlertTriangle, Save, Filter, Brain, Database, Zap, Globe, Settings, MousePointer2, ExternalLink, Terminal } from 'lucide-react';
-import { PluginManifest } from '../types';
+import { Puzzle, Shield, CheckCircle2, AlertTriangle, Save, Filter, Brain, Database, Zap, Globe, Settings, MousePointer2, ExternalLink, Terminal, ChevronDown, ChevronRight, Hash, Box } from 'lucide-react';
+import { PluginManifest, PluginCategory } from '../types';
 
 import { api } from '../services/api';
-
-const MANDATORY_TAGS = ['#CORE', '#MIND', '#MEMORY', '#LLM', '#TOOL', '#ADAPTER', '#HAL'];
 
 function ConfigModal({ plugin, onClose }: { plugin: PluginManifest, onClose: () => void }) {
   const [config, setConfig] = useState<Record<string, string>>({});
@@ -97,6 +95,15 @@ export function VersPluginManager() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [configTarget, setConfigTarget] = useState<PluginManifest | null>(null);
+  
+  // Category expanded state (Discord-style)
+  const [expandedCategories, setExpandedCategories] = useState<Record<PluginCategory, boolean>>({
+    'Agent': true,
+    'Tool': true,
+    'Memory': true,
+    'System': false,
+    'Other': true,
+  });
 
   useEffect(() => {
     fetchPlugins();
@@ -119,6 +126,10 @@ export function VersPluginManager() {
     setEditingPlugins(prev => prev.map(p => 
       p.id === id ? { ...p, is_active: !p.is_active } : p
     ));
+  };
+
+  const toggleCategory = (cat: PluginCategory) => {
+    setExpandedCategories(prev => ({ ...prev, [cat]: !prev[cat] }));
   };
 
   const hasChanges = JSON.stringify(plugins) !== JSON.stringify(editingPlugins);
@@ -156,6 +167,25 @@ export function VersPluginManager() {
     selectedTags.length === 0 || selectedTags.some(tag => p.tags.includes(tag))
   );
 
+  // Group by category
+  const groupedPlugins: Record<PluginCategory, PluginManifest[]> = {
+    'Agent': [],
+    'Tool': [],
+    'Memory': [],
+    'System': [],
+    'Other': [],
+  };
+
+  filteredPlugins.forEach(p => {
+    // Backend should return category, but fallback to 'Other' if missing or unknown
+    const cat = p.category || 'Other';
+    if (groupedPlugins[cat]) {
+      groupedPlugins[cat].push(p);
+    } else {
+      groupedPlugins['Other'].push(p);
+    }
+  });
+
   const getActionIcon = (iconName?: string) => {
     switch(iconName) {
       case 'Settings': return <Settings size={14} />;
@@ -173,9 +203,13 @@ export function VersPluginManager() {
       case 'Memory': return <Database size={20} />;
       case 'Skill': return <Zap size={20} />;
       case 'Communication': return <Globe size={20} />;
+      case 'HAL': return <MousePointer2 size={20} />;
       default: return <Puzzle size={20} />;
     }
   };
+
+  // Order of categories
+  const categoryOrder: PluginCategory[] = ['Agent', 'Tool', 'Memory', 'System', 'Other'];
 
   return (
     <div className="flex flex-col h-full bg-white/40 backdrop-blur-3xl overflow-hidden">
@@ -196,7 +230,7 @@ export function VersPluginManager() {
 
       <div className="flex-1 flex overflow-hidden">
         {/* Sidebar - Tags */}
-        <div className="w-64 border-r border-slate-100 bg-slate-50/30 p-6 flex flex-col gap-6">
+        <div className="w-64 border-r border-slate-100 bg-slate-50/30 p-6 flex flex-col gap-6 hidden md:flex">
           <div>
             <div className="flex items-center gap-2 text-slate-400 mb-4">
               <Filter size={14} />
@@ -234,93 +268,114 @@ export function VersPluginManager() {
           </div>
         </div>
 
-        {/* Main Area - Plugin Cards */}
-        <div className="flex-1 overflow-y-auto p-6 no-scrollbar">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {filteredPlugins.map(plugin => {
-              const isVerified = plugin.magic_seal === 0x56455253;
-              return (
-                <div 
-                  key={plugin.id}
-                  className={`group relative p-5 rounded-2xl border transition-all duration-300 ${
-                    plugin.is_active 
-                      ? 'bg-white border-slate-200 shadow-sm' 
-                      : 'bg-slate-50/50 border-slate-100 opacity-60'
-                  }`}
+        {/* Main Area - Plugin Cards (Grouped) */}
+        <div className="flex-1 overflow-y-auto p-6 no-scrollbar space-y-6">
+          {categoryOrder.map(category => {
+            const categoryPlugins = groupedPlugins[category];
+            if (categoryPlugins.length === 0) return null;
+
+            const isExpanded = expandedCategories[category];
+
+            return (
+              <div key={category} className="space-y-3">
+                {/* Category Header */}
+                <button 
+                  onClick={() => toggleCategory(category)}
+                  className="flex items-center gap-2 text-slate-400 hover:text-slate-600 transition-colors w-full text-left"
                 >
-                  <div className="flex items-start justify-between mb-4">
-                    <div className={`p-2.5 rounded-xl ${plugin.is_active ? 'bg-[#2e4de6]/10 text-[#2e4de6]' : 'bg-slate-200 text-slate-400'}`}>
-                      {getIcon(plugin.service_type)}
-                    </div>
-                    <button
-                      onClick={() => togglePlugin(plugin.id)}
-                      className={`w-12 h-6 rounded-full relative transition-colors duration-300 ${
-                        plugin.is_active ? 'bg-[#2e4de6]' : 'bg-slate-300'
-                      }`}
-                    >
-                      <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all duration-300 ${
-                        plugin.is_active ? 'left-7' : 'left-1'
-                      }`} />
-                    </button>
-                  </div>
+                  {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  <span className="text-[11px] font-black uppercase tracking-widest">{category}s</span>
+                  <div className="h-px bg-slate-100 flex-1 ml-2" />
+                  <span className="text-[10px] font-mono text-slate-300">{categoryPlugins.length}</span>
+                </button>
 
-                  <div className="mb-4">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-bold text-slate-800 text-sm">{plugin.name}</h3>
-                      {isVerified ? (
-                        <CheckCircle2 size={14} className="text-emerald-500" title={`Verified (SDK v${plugin.sdk_version})`} />
-                      ) : (
-                        <AlertTriangle size={14} className="text-amber-500" title="Unverified Plugin" />
-                      )}
-                    </div>
-                    <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 leading-relaxed">
-                      {plugin.description}
-                    </p>
-                  </div>
+                {/* Plugin Grid */}
+                {isExpanded && (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pl-2 animate-in slide-in-from-top-2 duration-300">
+                    {categoryPlugins.map(plugin => {
+                      const isVerified = plugin.magic_seal === 0x56455253;
+                      return (
+                        <div 
+                          key={plugin.id}
+                          className={`group relative p-5 rounded-2xl border transition-all duration-300 ${
+                            plugin.is_active 
+                              ? 'bg-white border-slate-200 shadow-sm hover:shadow-md' 
+                              : 'bg-slate-50/50 border-slate-100 opacity-60'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between mb-4">
+                            <div className={`p-2.5 rounded-xl ${plugin.is_active ? 'bg-[#2e4de6]/10 text-[#2e4de6]' : 'bg-slate-200 text-slate-400'}`}>
+                              {getIcon(plugin.service_type)}
+                            </div>
+                            <button
+                              onClick={() => togglePlugin(plugin.id)}
+                              className={`w-12 h-6 rounded-full relative transition-colors duration-300 ${
+                                plugin.is_active ? 'bg-[#2e4de6]' : 'bg-slate-300'
+                              }`}
+                            >
+                              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all duration-300 ${
+                                plugin.is_active ? 'left-7' : 'left-1'
+                              }`} />
+                            </button>
+                          </div>
 
-                  <div className="flex flex-wrap gap-1.5 mt-auto">
-                    {plugin.tags.map(tag => (
-                      <span key={tag} className="px-2 py-0.5 bg-slate-100 rounded text-[9px] font-mono text-slate-400">
-                        {tag}
-                      </span>
-                    ))}
-                    {!isVerified && (
-                      <span className="px-2 py-0.5 bg-amber-100 text-amber-600 rounded text-[9px] font-black uppercase tracking-tighter">
-                        UNVERIFIED
-                      </span>
-                    )}
-                    {isVerified && (
-                      <span className="px-2 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[9px] font-mono">
-                        v{plugin.sdk_version}
-                      </span>
-                    )}
-                  </div>
+                          <div className="mb-4">
+                            <div className="flex items-center gap-2">
+                              <h3 className="font-bold text-slate-800 text-sm">{plugin.name}</h3>
+                              {isVerified ? (
+                                <CheckCircle2 size={14} className="text-emerald-500" title={`Verified (SDK v${plugin.sdk_version})`} />
+                              ) : (
+                                <AlertTriangle size={14} className="text-amber-500" title="Unverified Plugin" />
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 leading-relaxed h-8">
+                              {plugin.description}
+                            </p>
+                          </div>
 
-                  {/* Action Icon (Bottom Right) */}
-                  {plugin.action_icon && (
-                    <button
-                      disabled={!plugin.is_active || isPluginPending(plugin.id)}
-                      onClick={() => setConfigTarget(plugin)}
-                      className={`absolute bottom-4 right-4 p-2 rounded-lg transition-all ${
-                        plugin.is_active && !isPluginPending(plugin.id)
-                          ? 'bg-[#2e4de6]/10 text-[#2e4de6] hover:bg-[#2e4de6] hover:text-white shadow-sm'
-                          : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-50'
-                      }`}
-                      title={!plugin.is_active ? "Activate plugin to configure" : isPluginPending(plugin.id) ? "Apply changes to configure" : "Plugin Settings"}
-                    >
-                      {getActionIcon(plugin.action_icon)}
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                          <div className="flex flex-wrap gap-1.5 mt-auto">
+                            {plugin.tags.map(tag => (
+                              <span key={tag} className="flex items-center gap-0.5 px-2 py-0.5 bg-slate-100 rounded text-[9px] font-mono text-slate-400">
+                                <Hash size={8} className="opacity-50" />
+                                {tag.replace('#', '')}
+                              </span>
+                            ))}
+                            {!isVerified && (
+                              <span className="px-2 py-0.5 bg-amber-100 text-amber-600 rounded text-[9px] font-black uppercase tracking-tighter">
+                                UNVERIFIED
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Action Icon (Bottom Right) */}
+                          {plugin.action_icon && (
+                            <button
+                              disabled={!plugin.is_active || isPluginPending(plugin.id)}
+                              onClick={() => setConfigTarget(plugin)}
+                              className={`absolute bottom-4 right-4 p-2 rounded-lg transition-all ${
+                                plugin.is_active && !isPluginPending(plugin.id)
+                                  ? 'bg-[#2e4de6]/10 text-[#2e4de6] hover:bg-[#2e4de6] hover:text-white shadow-sm'
+                                  : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-50'
+                              }`}
+                              title={!plugin.is_active ? "Activate plugin to configure" : isPluginPending(plugin.id) ? "Apply changes to configure" : "Plugin Settings"}
+                            >
+                              {getActionIcon(plugin.action_icon)}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
       {/* Footer - Apply Bar */}
       {hasChanges && (
-        <div className="p-4 bg-white border-t border-slate-100 flex items-center justify-between animate-in slide-in-from-bottom-full duration-500">
+        <div className="p-4 bg-white border-t border-slate-100 flex items-center justify-between animate-in slide-in-from-bottom-full duration-500 z-50">
           <div className="flex items-center gap-2 text-amber-600 px-4">
             <AlertTriangle size={16} />
             <span className="text-[10px] font-bold uppercase tracking-widest">Pending changes exist</span>

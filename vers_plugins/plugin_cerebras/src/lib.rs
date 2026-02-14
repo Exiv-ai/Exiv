@@ -12,17 +12,21 @@ use vers_shared::{
     kind = "Reasoning",
     description = "Ultra-high-speed reasoning via Cerebras API.",
     version = "0.2.0",
+    category = "Agent",
     action_icon = "Settings",
     config_keys = ["api_key", "model_id"],
     permissions = ["NetworkAccess"],
     capabilities = ["Reasoning"]
 )]
 pub struct CerebrasPlugin {
-    id: String,
-    api_key: Arc<RwLock<String>>,
-    model_id: Arc<RwLock<String>>,
-    allowed_permissions: Arc<RwLock<Vec<Permission>>>,
-    http_client: Arc<RwLock<Option<Arc<dyn NetworkCapability>>>>,
+    state: Arc<RwLock<CerebrasState>>,
+}
+
+struct CerebrasState {
+    api_key: String,
+    model_id: String,
+    allowed_permissions: Vec<Permission>,
+    http_client: Option<Arc<dyn NetworkCapability>>,
 }
 
 impl CerebrasPlugin {
@@ -31,11 +35,12 @@ impl CerebrasPlugin {
         let model_id = config.config_values.get("model_id").cloned().unwrap_or_else(|| "llama3.1-70b".to_string());
         
         Ok(Self {
-            id: config.id,
-            api_key: Arc::new(RwLock::new(api_key)),
-            model_id: Arc::new(RwLock::new(model_id)),
-            allowed_permissions: Arc::new(RwLock::new(vec![])),
-            http_client: Arc::new(RwLock::new(None)),
+            state: Arc::new(RwLock::new(CerebrasState {
+                api_key,
+                model_id,
+                allowed_permissions: vec![],
+                http_client: None,
+            })),
         })
     }
 }
@@ -51,23 +56,18 @@ impl Plugin for CerebrasPlugin {
         context: PluginRuntimeContext,
         network: Option<Arc<dyn NetworkCapability>>,
     ) -> anyhow::Result<()> {
-        {
-            let mut perms = self.allowed_permissions.write().await;
-            *perms = context.effective_permissions;
-        }
-        {
-            let mut client = self.http_client.write().await;
-            *client = network;
-        }
+        let mut state = self.state.write().await;
+        state.allowed_permissions = context.effective_permissions;
+        state.http_client = network;
         Ok(())
     }
 
     async fn on_event(
         &self,
         event: &vers_shared::VersEvent,
-    ) -> anyhow::Result<Option<vers_shared::VersEvent>> {
-        match event {
-            vers_shared::VersEvent::ThoughtRequested {
+    ) -> anyhow::Result<Option<vers_shared::VersEventData>> {
+        match &event.data {
+            vers_shared::VersEventData::ThoughtRequested {
                 agent,
                 engine_id,
                 message,
@@ -77,21 +77,20 @@ impl Plugin for CerebrasPlugin {
                     return Ok(None);
                 }
                 let content = self.think(agent, message, context.clone()).await?;
-                return Ok(Some(vers_shared::VersEvent::ThoughtResponse {
+                return Ok(Some(vers_shared::VersEventData::ThoughtResponse {
                     agent_id: agent.id.clone(),
                     content,
                     source_message_id: message.id.clone(),
                 }));
             }
-            vers_shared::VersEvent::ConfigUpdated { plugin_id, config } => {
+            vers_shared::VersEventData::ConfigUpdated { plugin_id, config } => {
                 if plugin_id == "mind.cerebras" {
+                    let mut state = self.state.write().await;
                     if let Some(key) = config.get("api_key") {
-                        let mut api_key = self.api_key.write().await;
-                        *api_key = key.clone();
+                        state.api_key = key.clone();
                     }
                     if let Some(model) = config.get("model_id") {
-                        let mut model_id = self.model_id.write().await;
-                        *model_id = model.clone();
+                        state.model_id = model.clone();
                     }
                     println!("🔌 Cerebras Plugin configuration hot-reloaded.");
                 }
@@ -107,8 +106,8 @@ impl Plugin for CerebrasPlugin {
     ) -> anyhow::Result<()> {
         match capability {
             vers_shared::PluginCapability::Network(net) => {
-                let mut client = self.http_client.write().await;
-                *client = Some(net);
+                let mut state = self.state.write().await;
+                state.http_client = Some(net);
                 println!("💉 Cerebras Plugin: NetworkCapability injected live.");
             }
         }
@@ -128,21 +127,14 @@ impl ReasoningEngine for CerebrasPlugin {
         message: &VersMessage,
         context: Vec<VersMessage>,
     ) -> anyhow::Result<String> {
-        let (api_key, model_id) = {
-            let key = self.api_key.read().await;
-            let model = self.model_id.read().await;
-            (key.clone(), model.clone())
-        };
+        let state = self.state.read().await;
 
-        if api_key.is_empty() {
+        if state.api_key.is_empty() {
             return Err(anyhow::anyhow!("Cerebras API Key not configured."));
         }
 
-        let client = {
-            let client_guard = self.http_client.read().await;
-            let client_opt: &Option<Arc<dyn NetworkCapability>> = &*client_guard;
-            client_opt.clone().ok_or_else(|| anyhow::anyhow!("NetworkCapability not injected."))?
-        };
+        let client = state.http_client.clone()
+            .ok_or_else(|| anyhow::anyhow!("NetworkCapability not injected."))?;
 
         let mut messages = Vec::new();
         messages.push(serde_json::json!({
@@ -165,11 +157,11 @@ impl ReasoningEngine for CerebrasPlugin {
             method: "POST".to_string(),
             url: "https://api.cerebras.ai/v1/chat/completions".to_string(),
             headers: [
-                ("Authorization".to_string(), format!("Bearer {}", api_key)),
+                ("Authorization".to_string(), format!("Bearer {}", state.api_key)),
                 ("Content-Type".to_string(), "application/json".to_string())
             ].into_iter().collect(),
             body: Some(serde_json::json!({
-                "model": model_id,
+                "model": state.model_id,
                 "messages": messages,
                 "stream": false
             }).to_string()),

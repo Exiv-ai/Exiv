@@ -37,11 +37,26 @@ export function AgentPluginWorkspace({ agent, availablePlugins, onBack }: Props)
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      // Find the first Reasoning engine and first Memory engine in the matrix
+      const reasoningPlugin = configs.find(c => {
+        const p = getPluginById(c.pluginId);
+        return p?.service_type === 'Reasoning';
+      });
+      const memoryPlugin = configs.find(c => {
+        const p = getPluginById(c.pluginId);
+        return p?.service_type === 'Memory';
+      });
+
       const metadata = { 
         ...agent.metadata, 
-        plugin_layout: JSON.stringify(configs) 
+        plugin_layout: JSON.stringify(configs),
+        preferred_memory: memoryPlugin?.pluginId || agent.metadata.preferred_memory
       };
-      await api.updateAgent(agent.id, { metadata });
+
+      await api.updateAgent(agent.id, { 
+        default_engine_id: reasoningPlugin?.pluginId,
+        metadata 
+      });
       onBack(); // Close the workspace after saving
     } catch (err) {
       console.error("Failed to save neural matrix:", err);
@@ -50,12 +65,9 @@ export function AgentPluginWorkspace({ agent, availablePlugins, onBack }: Props)
     }
   };
 
-  const AGENT_COMPATIBLE_TAGS = ['#MIND', '#MEMORY', '#TOOL', '#LLM'];
-  const COMPATIBLE_SERVICES = ['Reasoning', 'Memory', 'Skill', 'Action'];
-
   const libraryPlugins = availablePlugins.filter(p => 
     !configs.find(c => c.pluginId === p.id) &&
-    (p.tags.some(tag => AGENT_COMPATIBLE_TAGS.includes(tag)) || COMPATIBLE_SERVICES.includes(p.service_type))
+    (p.category === 'Agent' || p.category === 'Memory')
   );
 
   const handleDragStartFromLibrary = (id: string) => {

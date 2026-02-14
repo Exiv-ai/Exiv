@@ -5,9 +5,12 @@ edition.workspace = true
 
 [dependencies]
 vers_shared = { path = "../vers_shared" }
-plugin_ks2_2 = { path = "../vers_plugins/plugin_ks2_2" }
+plugin_ks22 = { path = "../vers_plugins/plugin_ks22" }
 plugin_deepseek = { path = "../vers_plugins/plugin_deepseek" }
 plugin_cerebras = { path = "../vers_plugins/plugin_cerebras" }
+plugin_moderator = { path = "../vers_plugins/plugin_moderator" }
+plugin_mcp = { path = "../vers_plugins/plugin_mcp" }
+plugin_vision = { path = "../vers_plugins/plugin_vision" }
 plugin_cursor = { path = "../vers_plugins/plugin_cursor" }
 plugin_python_bridge = { path = "../vers_plugins/plugin_python_bridge" }
 tokio.workspace = true
@@ -20,12 +23,17 @@ dotenvy = "0.15"
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "sqlite", "macros"] }
 async-trait.workspace = true
 axum.workspace = true
+tower = { version = "0.4", features = ["util"] }
 reqwest = { version = "0.12", features = ["json"] }
 tower-http.workspace = true
 futures.workspace = true
 tokio-stream.workspace = true
 async-stream.workspace = true
+rust-embed = "8.5"
+mime_guess = "2.0"
+chrono = { version = "0.4", features = ["serde"] }
+governor = "0.6"
+dashmap = "6.1"
 
 [dev-dependencies]
-tower = { version = "0.4", features = ["util"] }
 http = "1.0"

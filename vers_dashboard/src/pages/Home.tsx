@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { Suspense, lazy } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Activity, Database, MessageSquare, Puzzle, Settings } from 'lucide-react';
+import { Activity, Database, MessageSquare, Puzzle, Settings, Cpu, Brain, Zap, Shield, LucideIcon } from 'lucide-react';
 import { InteractiveGrid } from '../components/InteractiveGrid';
 import { GlassWindow } from '../components/GlassWindow';
 import { CustomCursor } from '../components/CustomCursor';
@@ -11,7 +11,7 @@ import { useDraggable } from '../hooks/useDraggable';
 
 import { api } from '../services/api';
 
-const StatusCore = lazy(() => import('../components/StatusCore').then(m => ({ default: (m as any).StatusCore })));
+const StatusCore = lazy(() => import('../components/StatusCore').then(m => ({ default: m.StatusCore })));
 const MemoryCore = lazy(() => import('../components/MemoryCore').then(m => ({ default: m.MemoryCore })));
 const VersWorkspace = lazy(() => import('../components/AgentWorkspace').then(m => ({ default: m.AgentWorkspace })));
 const VersPluginManager = lazy(() => import('../components/VersPluginManager').then(m => ({ default: m.VersPluginManager })));
@@ -23,6 +23,7 @@ export function Home() {
 
   const [activeMainView, setActiveMainView] = useState<string | null>(null);
   const [isCursorActive, setIsCursorActive] = useState(true);
+  const [plugins, setPlugins] = useState<PluginManifest[]>([]);
 
   // Phase 1 Refactor: Use Custom Hooks
   const { windows, openWindow, closeWindow, focusWindow } = useWindowManager();
@@ -40,6 +41,7 @@ export function Home() {
   useEffect(() => {
     api.getPlugins()
       .then((data: PluginManifest[]) => {
+        setPlugins(data);
         const cursorPlugin = data.find(p => p.name.includes("Neural Cursor"));
         if (cursorPlugin) {
           setIsCursorActive(cursorPlugin.is_active);
@@ -59,13 +61,40 @@ export function Home() {
     };
   }, [isCursorActive]);
 
-  const menuItems = [
-    { id: 'status', label: 'STATUS', path: '/status', icon: Activity, disabled: false },
-    { id: 'memory', label: 'MEMORY', path: '/dashboard', icon: Database, disabled: false },
-    { id: 'sandbox', label: 'VERS', path: '#', icon: MessageSquare, disabled: false },
-    { id: 'plugin', label: 'PLUGIN', path: '#', icon: Puzzle, disabled: false },
-    { id: 'system', label: 'SYSTEM', path: '#', icon: Settings, disabled: false },
-  ];
+  const iconMap: Record<string, LucideIcon> = {
+    'Activity': Activity,
+    'Database': Database,
+    'MessageSquare': MessageSquare,
+    'Puzzle': Puzzle,
+    'Settings': Settings,
+    'Cpu': Cpu,
+    'Brain': Brain,
+    'Zap': Zap,
+    'Shield': Shield,
+  };
+
+  const menuItems = useMemo(() => {
+    const baseItems = [
+      { id: 'status', label: 'STATUS', path: '/status', icon: Activity, disabled: false },
+      { id: 'memory', label: 'MEMORY', path: '/dashboard', icon: Database, disabled: false },
+      { id: 'sandbox', label: 'VERS', path: '#', icon: MessageSquare, disabled: false },
+      { id: 'plugin', label: 'PLUGIN', path: '#', icon: Puzzle, disabled: false },
+    ];
+
+    // 🚀 Dynamic Plugin Actions (Principle #6: SDK-driven UX)
+    const pluginItems = plugins
+      .filter(p => p.is_active && p.action_icon && p.action_target)
+      .map(p => ({
+        id: p.id,
+        label: p.name.split('.').pop()?.toUpperCase() || p.name.toUpperCase(),
+        path: p.action_target?.startsWith('/') ? p.action_target : '#',
+        icon: iconMap[p.action_icon || 'Puzzle'] || Puzzle,
+        disabled: false,
+        pluginId: p.id
+      }));
+
+    return [...baseItems, ...pluginItems, { id: 'system', label: 'SYSTEM', path: '#', icon: Settings, disabled: false }];
+  }, [plugins]);
 
   return (
     <div 
