@@ -109,16 +109,16 @@ docs/               Architecture docs, changelog, development guide
 
 ## Configuration
 
-Copy `.env.example` to `.env` and edit as needed.
+All settings have sensible defaults. Optionally copy `.env.example` to `.env` to override them.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8081` | HTTP server port |
-| `DATABASE_URL` | `sqlite:./exiv_memories.db` | SQLite database path |
+| `DATABASE_URL` | `sqlite:{exe_dir}/data/exiv_memories.db` | SQLite database path (relative to binary location) |
 | `EXIV_API_KEY` | (none) | Admin API key. Required in release builds. |
 | `DEEPSEEK_API_KEY` | (none) | DeepSeek API key |
 | `CEREBRAS_API_KEY` | (none) | Cerebras API key |
-| `CONSENSUS_ENGINES` | (none) | Comma-separated engine IDs for consensus mode |
+| `CONSENSUS_ENGINES` | `mind.deepseek,mind.cerebras` | Comma-separated engine IDs for consensus mode |
 | `DEFAULT_AGENT_ID` | `agent.exiv_default` | Default agent for `/api/chat` |
 | `EXIV_SKIP_ICON_EMBED` | (none) | Set to `1` to skip icon embedding during dev builds |
 | `RUST_LOG` | `info` | Log level filter |
