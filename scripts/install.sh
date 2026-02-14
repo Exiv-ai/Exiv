@@ -1,12 +1,12 @@
 #!/bin/bash
 # ============================================================
-# VERS System Installer
-# Builds, installs, and configures VERS as a standalone system
+# Exiv System Installer
+# Builds, installs, and configures Exiv as a standalone system
 # ============================================================
 set -euo pipefail
 
 # --- Defaults ---
-INSTALL_DIR="/opt/vers"
+INSTALL_DIR="/opt/exiv"
 SETUP_SERVICE=false
 SETUP_PYTHON=true
 BUILD_RELEASE=true
@@ -22,22 +22,22 @@ NC='\033[0m'
 
 usage() {
     cat << EOF
-VERS System Installer
+Exiv System Installer
 
 Usage: $0 [OPTIONS]
 
 Options:
-  --prefix DIR        Install directory (default: /opt/vers)
+  --prefix DIR        Install directory (default: /opt/exiv)
   --service           Register as systemd service
   --no-python         Skip Python venv setup
   --no-build          Skip build (use existing binary)
   --user USER         Service user (default: current user)
-  --uninstall         Remove VERS installation
+  --uninstall         Remove Exiv installation
   -h, --help          Show this help
 
 Examples:
-  $0                           # Build & install to /opt/vers
-  $0 --prefix ~/vers           # Install to home directory
+  $0                           # Build & install to /opt/exiv
+  $0 --prefix ~/exiv           # Install to home directory
   $0 --service                 # Install + systemd service
   $0 --uninstall               # Remove installation
 EOF
@@ -65,17 +65,17 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Uninstall
 # ============================================================
 if [ "$UNINSTALL" = true ]; then
-    echo -e "${CYAN}=== VERS System Uninstaller ===${NC}"
+    echo -e "${CYAN}=== Exiv System Uninstaller ===${NC}"
 
-    if systemctl is-active --quiet vers 2>/dev/null; then
-        echo -e "${YELLOW}Stopping vers service...${NC}"
-        sudo systemctl stop vers
-        sudo systemctl disable vers
+    if systemctl is-active --quiet exiv 2>/dev/null; then
+        echo -e "${YELLOW}Stopping exiv service...${NC}"
+        sudo systemctl stop exiv
+        sudo systemctl disable exiv
     fi
 
-    if [ -f /etc/systemd/system/vers.service ]; then
+    if [ -f /etc/systemd/system/exiv.service ]; then
         echo "Removing systemd service..."
-        sudo rm -f /etc/systemd/system/vers.service
+        sudo rm -f /etc/systemd/system/exiv.service
         sudo systemctl daemon-reload
     fi
 
@@ -84,14 +84,14 @@ if [ "$UNINSTALL" = true ]; then
         rm -rf "$INSTALL_DIR"
     fi
 
-    echo -e "${GREEN}VERS uninstalled.${NC}"
+    echo -e "${GREEN}Exiv uninstalled.${NC}"
     exit 0
 fi
 
 # ============================================================
 # Install
 # ============================================================
-echo -e "${CYAN}=== VERS System Installer ===${NC}"
+echo -e "${CYAN}=== Exiv System Installer ===${NC}"
 echo "  Project:  $PROJECT_ROOT"
 echo "  Install:  $INSTALL_DIR"
 echo "  Python:   $SETUP_PYTHON"
@@ -101,7 +101,7 @@ echo ""
 # --- Step 1: Build ---
 if [ "$BUILD_RELEASE" = true ]; then
     echo -e "${CYAN}[1/5] Building dashboard...${NC}"
-    cd "$PROJECT_ROOT/vers_dashboard"
+    cd "$PROJECT_ROOT/exiv_dashboard"
     npm run build 2>&1 | tail -3
 
     echo -e "${CYAN}[2/5] Building Rust binary (release)...${NC}"
@@ -109,13 +109,13 @@ if [ "$BUILD_RELEASE" = true ]; then
     cargo build --release 2>&1 | tail -5
 
     echo -e "${CYAN}[3/5] Stripping binary...${NC}"
-    strip "$PROJECT_ROOT/target/release/vers_system"
-    BINARY_SIZE=$(du -h "$PROJECT_ROOT/target/release/vers_system" | cut -f1)
+    strip "$PROJECT_ROOT/target/release/exiv_system"
+    BINARY_SIZE=$(du -h "$PROJECT_ROOT/target/release/exiv_system" | cut -f1)
     echo "  Binary size: $BINARY_SIZE"
 else
     echo -e "${YELLOW}[1-3/5] Skipping build (--no-build)${NC}"
-    if [ ! -f "$PROJECT_ROOT/target/release/vers_system" ]; then
-        echo -e "${RED}Error: Binary not found at target/release/vers_system${NC}"
+    if [ ! -f "$PROJECT_ROOT/target/release/exiv_system" ]; then
+        echo -e "${RED}Error: Binary not found at target/release/exiv_system${NC}"
         exit 1
     fi
 fi
@@ -125,7 +125,7 @@ echo -e "${CYAN}[4/5] Installing to $INSTALL_DIR...${NC}"
 mkdir -p "$INSTALL_DIR/scripts"
 mkdir -p "$INSTALL_DIR/data"
 
-cp "$PROJECT_ROOT/target/release/vers_system" "$INSTALL_DIR/"
+cp "$PROJECT_ROOT/target/release/exiv_system" "$INSTALL_DIR/"
 cp "$PROJECT_ROOT/scripts/bridge_runtime.py"  "$INSTALL_DIR/scripts/"
 cp "$PROJECT_ROOT/scripts/bridge_main.py"     "$INSTALL_DIR/scripts/"
 cp "$PROJECT_ROOT/scripts/requirements.txt"   "$INSTALL_DIR/scripts/"
@@ -141,12 +141,12 @@ fi
 # .env template (don't overwrite existing .env)
 if [ ! -f "$INSTALL_DIR/.env" ]; then
     # Generate a cryptographically random API key (Principle #5: Strict Permission Isolation)
-    # Release builds REQUIRE VERS_API_KEY for all admin endpoints.
+    # Release builds REQUIRE EXIV_API_KEY for all admin endpoints.
     GENERATED_API_KEY=$(openssl rand -hex 32 2>/dev/null || od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
 
     cat > "$INSTALL_DIR/.env" << ENVEOF
 # ============================================================
-# VERS System Configuration
+# Exiv System Configuration
 # Generated by install.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ)
 # ============================================================
 
@@ -158,11 +158,11 @@ RUST_LOG=info
 # Admin API key for protected endpoints (plugin config, permissions, shutdown).
 # REQUIRED: Without this, all admin operations are denied in release builds.
 # Pass via X-API-Key header.
-VERS_API_KEY=${GENERATED_API_KEY}
+EXIV_API_KEY=${GENERATED_API_KEY}
 
 # --- Database ---
 # SQLite database path. The data/ directory is created automatically.
-DATABASE_URL=sqlite:${INSTALL_DIR}/data/vers_memories.db
+DATABASE_URL=sqlite:${INSTALL_DIR}/data/exiv_memories.db
 
 # --- AI Provider API Keys ---
 # Uncomment and set to enable reasoning engines.
@@ -185,7 +185,7 @@ DATABASE_URL=sqlite:${INSTALL_DIR}/data/vers_memories.db
 # --- Remote Update (Principle #8: HITL) ---
 # GitHub repository for update distribution (owner/repo).
 # Used by GET /api/system/update/check and POST /api/system/update/apply.
-# VERS_UPDATE_REPO=karin-project/vers-system
+# EXIV_UPDATE_REPO=karin-project/exiv-system
 
 # --- Network ---
 # CORS origins (comma-separated). The embedded dashboard is served from
@@ -198,13 +198,13 @@ DATABASE_URL=sqlite:${INSTALL_DIR}/data/vers_memories.db
 # ALLOWED_HOSTS=
 ENVEOF
     echo "  Created .env"
-    echo -e "  ${YELLOW}VERS_API_KEY has been auto-generated. Save it securely:${NC}"
+    echo -e "  ${YELLOW}EXIV_API_KEY has been auto-generated. Save it securely:${NC}"
     echo -e "  ${CYAN}${GENERATED_API_KEY}${NC}"
 else
     echo "  .env already exists, skipping"
 fi
 
-chmod +x "$INSTALL_DIR/vers_system"
+chmod +x "$INSTALL_DIR/exiv_system"
 
 # --- Step 5: Python venv ---
 if [ "$SETUP_PYTHON" = true ]; then
@@ -228,15 +228,15 @@ if [ "$SETUP_PYTHON" = true ]; then
     echo "  Python dependencies installed"
 
     # Create a wrapper that uses the venv's python
-    cat > "$INSTALL_DIR/vers_run.sh" << RUNEOF
+    cat > "$INSTALL_DIR/exiv_run.sh" << RUNEOF
 #!/bin/bash
-# VERS System launcher (uses bundled Python venv)
+# Exiv System launcher (uses bundled Python venv)
 cd "\$(dirname "\$0")"
 export PATH="\$(pwd)/venv/bin:\$PATH"
-exec ./vers_system "\$@"
+exec ./exiv_system "\$@"
 RUNEOF
-    chmod +x "$INSTALL_DIR/vers_run.sh"
-    echo "  Created vers_run.sh (launcher with venv)"
+    chmod +x "$INSTALL_DIR/exiv_run.sh"
+    echo "  Created exiv_run.sh (launcher with venv)"
 else
     echo -e "${YELLOW}[5/5] Skipping Python setup (--no-python)${NC}"
 fi
@@ -252,15 +252,15 @@ if [ "$SETUP_SERVICE" = true ]; then
     echo ""
     echo -e "${CYAN}Setting up systemd service...${NC}"
 
-    EXEC_START="$INSTALL_DIR/vers_system"
+    EXEC_START="$INSTALL_DIR/exiv_system"
     if [ "$SETUP_PYTHON" = true ]; then
-        EXEC_START="$INSTALL_DIR/vers_run.sh"
+        EXEC_START="$INSTALL_DIR/exiv_run.sh"
     fi
 
-    SERVICE_FILE="/etc/systemd/system/vers.service"
+    SERVICE_FILE="/etc/systemd/system/exiv.service"
     sudo tee "$SERVICE_FILE" > /dev/null << SVCEOF
 [Unit]
-Description=VERS System
+Description=Exiv System
 After=network.target
 
 [Service]
@@ -277,11 +277,11 @@ WantedBy=multi-user.target
 SVCEOF
 
     sudo systemctl daemon-reload
-    sudo systemctl enable vers
-    echo "  Service registered: vers.service"
-    echo "  Start with: sudo systemctl start vers"
-    echo "  Status:     sudo systemctl status vers"
-    echo "  Logs:       journalctl -u vers -f"
+    sudo systemctl enable exiv
+    echo "  Service registered: exiv.service"
+    echo "  Start with: sudo systemctl start exiv"
+    echo "  Status:     sudo systemctl status exiv"
+    echo "  Logs:       journalctl -u exiv -f"
 fi
 
 # --- Summary ---
@@ -290,12 +290,12 @@ echo -e "${GREEN}=== Installation complete ===${NC}"
 echo ""
 ls -lh "$INSTALL_DIR/"
 echo ""
-echo -e "  To run manually:  ${CYAN}cd $INSTALL_DIR && ./vers_system${NC}"
+echo -e "  To run manually:  ${CYAN}cd $INSTALL_DIR && ./exiv_system${NC}"
 if [ "$SETUP_PYTHON" = true ]; then
-    echo -e "  With Python venv: ${CYAN}cd $INSTALL_DIR && ./vers_run.sh${NC}"
+    echo -e "  With Python venv: ${CYAN}cd $INSTALL_DIR && ./exiv_run.sh${NC}"
 fi
 if [ "$SETUP_SERVICE" = true ]; then
-    echo -e "  As service:       ${CYAN}sudo systemctl start vers${NC}"
+    echo -e "  As service:       ${CYAN}sudo systemctl start exiv${NC}"
 fi
 echo -e "  Dashboard:        ${CYAN}http://localhost:8081${NC}"
 echo ""

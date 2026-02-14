@@ -1,24 +1,27 @@
 [workspace]
 members = [
-    "vers_core",
-    "vers_shared",
-    "vers_plugins/plugin_ks22",
-    "vers_plugins/plugin_deepseek",
-    "vers_plugins/plugin_cerebras",
-    "vers_plugins/plugin_moderator",
-    "vers_plugins/plugin_mcp",
-    "vers_plugins/plugin_vision",
-    "vers_plugins/plugin_cursor", "vers_macros",
-    "vers_plugins/plugin_python_bridge",
-    "vers_dashboard/src-tauri",
+    "exiv_core",
+    "exiv_shared",
+    "exiv_plugins/plugin_ks22",
+    "exiv_plugins/plugin_deepseek",
+    "exiv_plugins/plugin_cerebras",
+    "exiv_plugins/plugin_moderator",
+    "exiv_plugins/plugin_mcp",
+    "exiv_plugins/plugin_vision",
+    "exiv_plugins/plugin_cursor",
+    "exiv_macros",
+    "exiv_plugins/plugin_python_bridge",
+    "exiv_dashboard/src-tauri",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0-alpha.1"
 edition = "2021"
-authors = ["Karin Project Team"]
-license = "MIT"
+authors = ["Exiv Project <exiv.project@proton.me>"]
+license = "BSL-1.1"
+repository = "https://github.com/Exiv-ai/Exiv"
+homepage = "https://github.com/Exiv-ai/Exiv"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

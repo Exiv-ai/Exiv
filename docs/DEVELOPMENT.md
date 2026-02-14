@@ -1,4 +1,4 @@
-# VERS SYSTEM Development Guide
+# Exiv Development Guide
 
 開発者が遵守すべきガードレール（制約ルール）と、現在進行中のリファクタリングの状況を統合したドキュメントです。
 
@@ -10,11 +10,11 @@
 
 ### 1.1 Security Hardening: Event Envelopes
 
-**目標**: `VersEvent` を Kernel が管理する封筒（Envelope）で包み、送信元（Issuer）の改竄を防ぐ。
+**目標**: `ExivEvent` を Kernel が管理する封筒（Envelope）で包み、送信元（Issuer）の改竄を防ぐ。
 
 | ステップ | DO NOT | 理由 |
 | :--- | :--- | :--- |
-| `EventEnvelope` 構造体を作成する | `VersEvent` 自体に `issuer_id` を追加してはいけない | プラグインが ID を偽装できてしまうため |
+| `EventEnvelope` 構造体を作成する | `ExivEvent` 自体に `issuer_id` を追加してはいけない | プラグインが ID を偽装できてしまうため |
 | `EventProcessor` で `issuer` を検証する | `if plugin_id == "admin"` のようなハードコード特権判定を行ってはいけない | 原則 #2 (Capability over Concrete Type) に反する |
 | プラグインの `on_event` 引数を変更する | プラグイン側で `issuer` を書き換え可能にしてはいけない | 封印後のデータ一貫性を損なうため |
 | SSE 出力を調整する | 既存の JSON フォーマットを破壊してはいけない | Dashboard が壊れる「無限ループ」の典型例 |
@@ -26,7 +26,7 @@
 
 | ステップ | DO NOT | 理由 |
 | :--- | :--- | :--- |
-| `EnvelopedEvent` に `depth: u8` を追加する | `VersEvent` に `depth` を追加してはいけない | プラグイン側で深さを偽装できるため |
+| `EnvelopedEvent` に `depth: u8` を追加する | `ExivEvent` に `depth` を追加してはいけない | プラグイン側で深さを偽装できるため |
 | `dispatch_event` で上限チェックする | 上限値をハードコードしてはいけない | `AppConfig.max_event_depth` で設定可能にするため |
 | 再配信時に `parent.depth + 1` を設定する | 全イベントの `depth` を 0 で固定してはいけない | 連鎖を検知できなくなるため |
 | 破棄時にエラーログを出力する | サイレントにイベントを捨ててはいけない | デバッグが不可能になるため |
@@ -99,7 +99,7 @@
 | Category | Item | Status |
 |----------|------|--------|
 | Security | ダミーAPIキー削除、環境変数ベースに移行 (`db.rs`) | Done |
-| Security | 認証バイパス修正、release buildで`VERS_API_KEY`必須化 (`handlers.rs`) | Done |
+| Security | 認証バイパス修正、release buildで`EXIV_API_KEY`必須化 (`handlers.rs`) | Done |
 | Security | Python Bridge メソッドホワイトリスト導入 (`bridge_runtime.py`) | Done |
 | Security | パストラバーサル対策 (`plugin_python_bridge`) | Done |
 | Security | 未使用DISCORD_TOKEN削除 (`.env`) | Done |
@@ -118,7 +118,7 @@
 
 - [ ] Unit Tests: handlers, db, capabilities のユニットテスト追加
 - [ ] CSRF/Rate Limiting: tower ミドルウェア追加
-- [ ] Manifest Caching: vers_macros 側でのキャッシュ実装
+- [ ] Manifest Caching: exiv_macros 側でのキャッシュ実装
 
 ---
 

@@ -21,7 +21,7 @@ sys.stdout = sys.stderr
 
 def emit_event(event_type, data):
     """
-    Sends an asynchronous event back to VERS Kernel.
+    Sends an asynchronous event back to Exiv Kernel.
     Format: {"type": "event", "event_type": str, "data": any}
     """
     with stdout_lock:
@@ -158,7 +158,7 @@ def main():
 
             # Built-in methods
             if method_name == "get_manifest":
-                manifest = getattr(user_logic, "VERS_MANIFEST", {
+                manifest = getattr(user_logic, "EXIV_MANIFEST", {
                     "id": "python.unnamed",
                     "name": "Unnamed Python Script",
                     "description": "No description provided.",

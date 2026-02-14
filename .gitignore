@@ -1,19 +1,39 @@
 
 # Node.js
+node_modules/
+dist/
+.eslintcache
+
 # OS / IDE
+.DS_Store
+.idea/
+.vscode/
+
 # Rust
-# VERS-OS Specific
 **/*.rs.bk
+target/
+
+# Exiv Specific
 *.db
 *.db-shm
 *.db-wal
 *.log
-.DS_Store
+*.bak
 .env
-.eslintcache
-.idea/
-.vscode/
 compiled-tailwind.css
-dist/
-node_modules/
-target/
+
+# Build artifacts
+exiv_bin_release/
+exiv_guardian
+ai_karin
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Test files
+test_*.html
+
+# Dashboard build output
+exiv_dashboard/public/

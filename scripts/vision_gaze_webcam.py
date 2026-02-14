@@ -14,8 +14,8 @@ except ImportError as e:
     print("👁️ Falling back to Mock Mode. Install: pip install opencv-python mediapipe", file=sys.stderr)
     REAL_MODE = False
 
-# VERS Plugin Interface
-VERS_MANIFEST = {
+# Exiv Plugin Interface
+EXIV_MANIFEST = {
     "id": "python.gaze",
     "name": "Webcam Gaze Tracker",
     "description": "Real-time eye tracking via webcam (MediaPipe Face Mesh). Click eye icon to toggle.",

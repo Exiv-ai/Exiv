@@ -1,4 +1,4 @@
-VERS_MANIFEST = {
+EXIV_MANIFEST = {
     "id": "python.analyst",
     "name": "Data Analyst Agent",
     "description": "Python-based data analysis agent that can fetch external data.",
@@ -12,7 +12,7 @@ VERS_MANIFEST = {
 
 def think(data):
     """
-    Python logic for VERS Bridge.
+    Python logic for Exiv Bridge.
     """
     try:
         message_content = data.get("message", {}).get("content", "").lower()

@@ -1,6 +1,6 @@
-# VERS SYSTEM Documentation
+# Exiv Documentation
 
-Documentation for VERS SYSTEM design, development, and quality management.
+Documentation for Exiv design, development, and quality management.
 
 ## Quick Links
 
@@ -23,7 +23,7 @@ Documentation for VERS SYSTEM design, development, and quality management.
 2. **Rate Limiting** - DoS protection (10 req/s per IP, burst 20)
 3. **Audit Logging** - Complete security event trail
 4. **Self-Healing Python Bridge** - Auto-restart on crash (max 3 attempts)
-5. **Build Optimization** - `VERS_SKIP_ICON_EMBED=1` for faster development
+5. **Build Optimization** - `EXIV_SKIP_ICON_EMBED=1` for faster development
 6. **International Accessibility** - All comments translated to English
 
 ## Document Index
@@ -39,29 +39,29 @@ Documentation for VERS SYSTEM design, development, and quality management.
 
 | Plugin | Location | Description |
 |--------|----------|-------------|
-| vers_macros | `vers_macros/README.md` | Macro optimization guide, icon embedding, CI/CD integration |
-| All plugins | `vers_plugins/*/README.md` | Individual plugin documentation (WIP) |
+| exiv_macros | `exiv_macros/README.md` | Macro optimization guide, icon embedding, CI/CD integration |
+| All plugins | `exiv_plugins/*/README.md` | Individual plugin documentation (WIP) |
 
 ## Getting Started
 
 ```bash
 # Clone repository
 git clone <repository-url>
-cd vers_project
+cd exiv_project
 
 # Build and run (development)
 cargo build
-cargo run --package vers_core
+cargo run --package exiv_core
 
 # Build and run (release - optimized)
 cargo build --release
-cargo run --package vers_core --release
+cargo run --package exiv_core --release
 
 # Run tests
 cargo test
 
 # Fast development builds (skip icon embedding)
-export VERS_SKIP_ICON_EMBED=1
+export EXIV_SKIP_ICON_EMBED=1
 cargo build
 ```
 
@@ -84,12 +84,6 @@ cargo build
 - `GET /api/permissions/pending` - Pending permission requests
 - `POST /api/permissions/:id/approve` - Approve request
 - `POST /api/permissions/:id/deny` - Deny request
-
-## Assets
-
-| File | Description |
-|------|-------------|
-| [assets/screenshot-2026-02-10.png](assets/screenshot-2026-02-10.png) | Dashboard screenshot |
 
 ## Contributing
 

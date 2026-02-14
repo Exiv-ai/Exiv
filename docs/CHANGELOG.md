@@ -1,4 +1,4 @@
-# VERS SYSTEM Changelog
+# Exiv Changelog
 
 Project's major changes recorded chronologically.
 
@@ -31,8 +31,8 @@ Project's major changes recorded chronologically.
 | # | Feature | Files | Implementation |
 |---|---------|-------|----------------|
 | 10 | Human-in-the-Loop Permissions | `db.rs`, `handlers.rs`, `migrations/`, `SecurityGuard.tsx`, `api.ts` | Created `permission_requests` table. API: GET /pending, POST /:id/approve, POST /:id/deny. Dashboard polls every 3s. Completes Principle 1.8. |
-| 11 | Macro Build Optimization | `vers_macros/src/lib.rs`, `vers_macros/README.md` | Added `VERS_SKIP_ICON_EMBED=1` env var for faster dev builds. Early validation for required fields. 200+ line README with CI/CD examples. |
-| 12 | Japanese Comment Translation | `vers_macros/`, `vers_core/` (multiple files) | Translated 35 Japanese comments to English. Improves international contributor accessibility. |
+| 11 | Macro Build Optimization | `exiv_macros/src/lib.rs`, `exiv_macros/README.md` | Added `EXIV_SKIP_ICON_EMBED=1` env var for faster dev builds. Early validation for required fields. 200+ line README with CI/CD examples. |
+| 12 | Japanese Comment Translation | `exiv_macros/`, `exiv_core/` (multiple files) | Translated 35 Japanese comments to English. Improves international contributor accessibility. |
 
 ### Test Results
 
@@ -53,7 +53,7 @@ Total: 45 tests (up from 11 in Phase 5)
 
 ### Performance Metrics
 
-- **Build Time (dev)**: ~6s → ~5s with `VERS_SKIP_ICON_EMBED=1`
+- **Build Time (dev)**: ~6s → ~5s with `EXIV_SKIP_ICON_EMBED=1`
 - **Build Time (release)**: 1m 45s (no change)
 - **Startup Time**: ~3s (all 9 plugins loaded)
 - **Rate Limit**: 10 req/s per IP, burst 20
@@ -85,10 +85,10 @@ Total: 45 tests (up from 11 in Phase 5)
 
 | # | Issue | File | Change |
 |---|-------|------|--------|
-| 1 | Hardcoded dummy API keys | `vers_core/src/db.rs` | `sk-dummy-*` を削除。環境変数 `DEEPSEEK_API_KEY` / `CEREBRAS_API_KEY` から読み取る方式に変更 |
-| 2 | Auth bypass when API key unconfigured | `vers_core/src/handlers.rs` | `check_auth`: release build では `VERS_API_KEY` 必須、debug build では省略可 |
+| 1 | Hardcoded dummy API keys | `exiv_core/src/db.rs` | `sk-dummy-*` を削除。環境変数 `DEEPSEEK_API_KEY` / `CEREBRAS_API_KEY` から読み取る方式に変更 |
+| 2 | Auth bypass when API key unconfigured | `exiv_core/src/handlers.rs` | `check_auth`: release build では `EXIV_API_KEY` 必須、debug build では省略可 |
 | 3 | Python RCE via unrestricted `getattr()` | `scripts/bridge_runtime.py` | `ALLOWED_METHODS` ホワイトリスト導入。`on_action_` プレフィックスも許可。未使用 `import os` 削除 |
-| 4 | Path traversal in script_path config | `vers_plugins/plugin_python_bridge/src/lib.rs` | `..` を含むパス・絶対パス・`scripts/` 外のパスを拒否 |
+| 4 | Path traversal in script_path config | `exiv_plugins/plugin_python_bridge/src/lib.rs` | `..` を含むパス・絶対パス・`scripts/` 外のパスを拒否 |
 | 5 | Unused Discord token in .env | `.env` | `DISCORD_TOKEN=dummy_token_for_guardian` を削除 |
 
 ### Performance Improvements
@@ -96,23 +96,23 @@ Total: 45 tests (up from 11 in Phase 5)
 | # | Issue | File(s) | Change |
 |---|-------|---------|--------|
 | 6 | Event history O(n) deletion | `events.rs`, `lib.rs`, `handlers.rs`, tests x3 | `Vec` -> `VecDeque`, `remove(0)` -> `pop_front()` (O(1)) |
-| 7 | Whitelist O(n) linear scan | `vers_core/src/capabilities.rs` | `Vec<String>` -> `HashSet<String>`, hosts pre-lowercased at init |
-| 8 | Background reader task leak | `vers_plugins/plugin_python_bridge/src/lib.rs` | `JoinHandle<()>` を `PythonProcessHandle` に追加、spawn 戻り値を保持 |
+| 7 | Whitelist O(n) linear scan | `exiv_core/src/capabilities.rs` | `Vec<String>` -> `HashSet<String>`, hosts pre-lowercased at init |
+| 8 | Background reader task leak | `exiv_plugins/plugin_python_bridge/src/lib.rs` | `JoinHandle<()>` を `PythonProcessHandle` に追加、spawn 戻り値を保持 |
 
 ### Code Quality
 
 | # | Issue | File | Change |
 |---|-------|------|--------|
-| 9 | 6-level nesting in event dispatch | `vers_core/src/managers.rs` | early-continue パターンに変更、ネスト削減 |
-| 10 | Split React imports | `vers_dashboard/src/components/StatusCore.tsx` | `memo` を既存 React import 行に統合 |
+| 9 | 6-level nesting in event dispatch | `exiv_core/src/managers.rs` | early-continue パターンに変更、ネスト削減 |
+| 10 | Split React imports | `exiv_dashboard/src/components/StatusCore.tsx` | `memo` を既存 React import 行に統合 |
 
 ### Verification
 
 ```
-$ cargo check -p vers_core -p plugin_python_bridge ...
+$ cargo check -p exiv_core -p plugin_python_bridge ...
 Finished `dev` profile [unoptimized + debuginfo] target(s) -- 0 warnings
 
-$ cargo test -p vers_core
+$ cargo test -p exiv_core
 test result: ok. 11 passed; 0 failed
 ```
 
@@ -124,7 +124,7 @@ test result: ok. 11 passed; 0 failed
 
 ### Changes
 
-1. **マクロによる PluginCast の自動実装 (原則6)**: `#[vers_plugin]` マクロが `capabilities` リストを解析し、ダウンキャスト用メソッドを自動生成。DRY原則の徹底と実装漏れの排除。
+1. **マクロによる PluginCast の自動実装 (原則6)**: `#[exiv_plugin]` マクロが `capabilities` リストを解析し、ダウンキャスト用メソッドを自動生成。DRY原則の徹底と実装漏れの排除。
 
 2. **Inventory による分散型プラグイン登録 (原則1)**: `inventory` クレートを採用。Kernel の `managers.rs` から具体的なプラグイン依存を排除し、「プラグ・アンド・プレイ」を実現。
 

@@ -1,203 +1,139 @@
-# VERS SYSTEM
+# Exiv
 
-> **V**ersatile **E**vent-driven **R**easoning **S**ystem
-
-A production-ready AI agent orchestration platform built in Rust, featuring plugin-based architecture, event-driven communication, and human-in-the-loop security controls.
+Exiv (Existence × Virtual) is an AI agent orchestration platform written in Rust. It provides a plugin-based kernel where multiple AI engines, tools, and services communicate through an asynchronous event bus. An admin can control plugin permissions at runtime through a human-in-the-loop approval system.
 
 [![Version](https://img.shields.io/badge/version-0.1.0--alpha.1-blue)]()
-[![Tests](https://img.shields.io/badge/tests-45%20passing-brightgreen)]()
-[![Code Quality](https://img.shields.io/badge/quality-90%2F100%20(A)-brightgreen)]()
-[![License](https://img.shields.io/badge/license-MIT-blue)]()
+[![Tests](https://img.shields.io/badge/tests-76%20passing-brightgreen)]()
+[![License](https://img.shields.io/badge/license-BSL%201.1%20→%20MIT%202028-blue)](LICENSE)
 
-## ✨ Features
+## Features
 
-- **🔌 Plugin Architecture**: Hot-swappable AI engines (DeepSeek, Cerebras, etc.)
-- **🛡️ Security-First**: Rate limiting, audit logging, human-in-the-loop approvals
-- **⚡ Event-Driven**: Actor model with async event bus
-- **🐍 Python Bridge**: Execute Python code with sandboxed capabilities
-- **🎯 Type-Safe Macros**: Automatic manifest generation and capability registration
-- **📊 Real-Time Dashboard**: React + TypeScript web interface
-- **🔄 Self-Healing**: Auto-restart on plugin crashes (max 3 attempts)
+- **Plugin architecture** — AI engines (DeepSeek, Cerebras, etc.) and tools load as independent crates. Plugins can be added, removed, or swapped without rebuilding the kernel.
+- **Event-driven kernel** — All inter-plugin communication goes through an async event bus. Events are traced end-to-end with unique IDs.
+- **Human-in-the-loop security** — Sensitive operations (permission grants, config changes) require explicit admin approval. All decisions are recorded in an audit log.
+- **Python bridge** — Execute Python scripts in a sandboxed subprocess with automatic restart on failure (up to 3 attempts).
+- **Proc-macro SDK** — The `#[exiv_plugin]` macro generates plugin manifests, factory boilerplate, and capability registration at compile time.
+- **Web dashboard** — React + TypeScript UI served from the kernel binary via `rust-embed`. Connects to the kernel's SSE stream for real-time updates.
 
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
-# Clone repository
-git clone <repository-url>
-cd vers_project
+git clone https://github.com/Exiv-ai/Exiv.git
+cd Exiv
 
-# Build (development)
 cargo build
+cargo run --package exiv_core
+```
 
-# Run kernel
-cargo run --package vers_core
+The dashboard is served at http://localhost:8081.
 
-# Run tests
+To run tests:
+
+```bash
 cargo test
+```
 
-# Build optimized release
+For optimized release builds:
+
+```bash
 cargo build --release
-cargo run --package vers_core --release
+cargo run --package exiv_core --release
 ```
 
-**Access Dashboard:** http://localhost:8081
-
-## 📂 Project Structure
+## Project Structure
 
 ```
-vers_project/
-├── vers_core/          # Kernel: Event bus, plugin manager, API server
-├── vers_shared/        # SDK: Common interfaces for plugins
-├── vers_plugins/       # Official plugins (DeepSeek, Cerebras, MCP, etc.)
-├── vers_macros/        # Procedural macros for plugin development
-├── vers_dashboard/     # React/TypeScript web UI
-├── scripts/            # Python bridge runtime and utilities
-└── docs/               # Architecture, development guides, changelog
+exiv_core/          Kernel — event bus, plugin manager, HTTP API, rate limiter
+exiv_shared/        SDK — traits (Plugin, ReasoningEngine, Tool, etc.) and shared types
+exiv_macros/        Procedural macro for plugin manifest generation
+exiv_plugins/       Official plugins (8 crates)
+exiv_dashboard/     React/TypeScript web UI (Tauri-compatible)
+scripts/            Python bridge runtime, installer
+docs/               Architecture docs, changelog, development guide
 ```
 
-## 🔌 Available Plugins
+## Plugins
 
-| Plugin | Type | Description |
-|--------|------|-------------|
-| `mind.deepseek` | Reasoning | DeepSeek R1 reasoning engine |
-| `mind.cerebras` | Reasoning | Cerebras Llama 3.3 70B engine |
-| `core.ks22` | Memory | Knowledge Store 2.2 (persistent memory) |
-| `core.moderator` | Tool | Content moderation engine |
-| `hal.cursor` | HAL | Cursor control interface |
-| `python.analyst` | Tool | Python code execution bridge |
+| ID | Type | Description |
+|----|------|-------------|
+| `mind.deepseek` | Reasoning | DeepSeek R1 |
+| `mind.cerebras` | Reasoning | Cerebras Llama 3.3 70B |
+| `core.ks22` | Memory | Knowledge Store 2.2 — persistent key-value memory with chronological recall |
+| `core.moderator` | Tool | Content moderation |
+| `hal.cursor` | HAL | Mouse/keyboard control interface |
+| `python.analyst` | Tool | Python code execution via bridge subprocess |
 | `python.gaze` | Tool | Gaze tracking (mock mode) |
-| `adapter.mcp` | Tool | Model Context Protocol adapter |
-| `vision.screen` | Tool | Screen capture and vision |
+| `adapter.mcp` | Tool | Model Context Protocol client |
+| `vision.screen` | Tool | Screen capture |
 
-## 📡 API Endpoints
+## API
 
-### Core
-- `GET /api/metrics` - System metrics
-- `GET /api/plugins` - Plugin list with manifests
-- `GET /api/agents` - Agent configurations
-- `GET /api/events` - Server-Sent Events stream
-- `POST /api/chat` - Send message to agent
+**Public endpoints:**
 
-### Admin (Rate Limited: 10 req/s)
-- `POST /api/system/shutdown` - Graceful shutdown
-- `POST /api/plugins/:id/config` - Update plugin config
-- `POST /api/plugins/:id/permissions/grant` - Grant permission
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/metrics` | System metrics |
+| GET | `/api/plugins` | Plugin list with manifests |
+| GET | `/api/agents` | Agent configurations |
+| GET | `/api/events` | SSE event stream |
+| POST | `/api/chat` | Send message to an agent |
 
-### Human-in-the-Loop (Phase 6)
-- `GET /api/permissions/pending` - Pending permission requests
-- `POST /api/permissions/:id/approve` - Approve request
-- `POST /api/permissions/:id/deny` - Deny request
+**Admin endpoints** (rate limited to 10 req/s, requires `X-API-Key` header):
 
-## 🛡️ Security Features
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/system/shutdown` | Graceful shutdown |
+| POST | `/api/plugins/:id/config` | Update plugin config |
+| POST | `/api/plugins/:id/permissions/grant` | Grant permission to plugin |
+| GET | `/api/permissions/pending` | List pending permission requests |
+| POST | `/api/permissions/:id/approve` | Approve a request |
+| POST | `/api/permissions/:id/deny` | Deny a request |
 
-1. **Rate Limiting**: 10 req/s per IP, burst 20 (admin endpoints)
-2. **Audit Logging**: All permission grants/denials tracked with timestamps
-3. **Human Approval**: Sensitive operations require admin confirmation
-4. **Capability Isolation**: Plugins run with minimal permissions
-5. **DNS Rebinding Protection**: IP whitelist validation
-6. **Authentication**: API key required for admin endpoints
+## Configuration
 
-## 📜 Documentation
+Copy `.env.example` to `.env` and edit as needed.
 
-**Quick Links:**
-- **[Architecture](docs/ARCHITECTURE.md)** - Design principles, security framework
-- **[Development](docs/DEVELOPMENT.md)** - Coding standards, guardrails
-- **[Changelog](docs/CHANGELOG.md)** - Phase 1 → Phase 6 history
-- **[Quality Audit](docs/CODE_QUALITY_AUDIT.md)** - Code quality tracking (65 → 90+)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8081` | HTTP server port |
+| `DATABASE_URL` | `sqlite:./exiv_memories.db` | SQLite database path |
+| `EXIV_API_KEY` | (none) | Admin API key. Required in release builds. |
+| `DEEPSEEK_API_KEY` | (none) | DeepSeek API key |
+| `CEREBRAS_API_KEY` | (none) | Cerebras API key |
+| `CONSENSUS_ENGINES` | (none) | Comma-separated engine IDs for consensus mode |
+| `DEFAULT_AGENT_ID` | `agent.karin` | Default agent for `/api/chat` |
+| `EXIV_SKIP_ICON_EMBED` | (none) | Set to `1` to skip icon embedding during dev builds |
 
-**Plugin Development:**
-- **[vers_macros README](vers_macros/README.md)** - Macro usage, optimization guide
+## Testing
 
-## 🧪 Testing
-
-```bash
-# Run all tests
-cargo test
-
-# Run specific package tests
-cargo test --package vers_core
-cargo test --package vers_shared
-
-# Run integration tests
-cargo test --test '*'
-
-# With coverage (requires cargo-llvm-cov)
-cargo llvm-cov --package vers_core --html
-```
-
-**Test Coverage:**
-- **Unit Tests**: 34 (handlers, db, capabilities, middleware, config)
-- **Integration Tests**: 11 (event cascading, security, memory)
-- **Total**: 45 tests ✅
-
-## ⚙️ Configuration
-
-**Environment Variables:**
+76 tests (39 unit, 37 integration/plugin).
 
 ```bash
-# Database
-DATABASE_URL=sqlite:./vers_memories.db
-
-# Default Agent
-DEFAULT_AGENT_ID=agent.karin
-
-# API Keys (optional, for AI engines)
-DEEPSEEK_API_KEY=your_key_here
-CEREBRAS_API_KEY=your_key_here
-
-# Admin Authentication (required in release mode)
-VERS_API_KEY=your_admin_key
-
-# Consensus Engines (Phase 6)
-CONSENSUS_ENGINES=mind.deepseek,mind.cerebras
-
-# Build Optimization (Phase 6)
-VERS_SKIP_ICON_EMBED=1  # Faster dev builds
+cargo test                              # all tests
+cargo test --package exiv_core          # kernel only
+cargo test --test '*'                   # integration tests only
+cargo llvm-cov --package exiv_core --html   # coverage report (requires cargo-llvm-cov)
 ```
 
-## 🏗️ Build Optimization
+## Security
 
-**Development (Fast Incremental Builds):**
-```bash
-export VERS_SKIP_ICON_EMBED=1
-cargo build
-```
+Admin endpoints are protected by API key authentication (`X-API-Key` header) and per-IP rate limiting (10 req/s, burst 20). Plugin permission grants and denials are written to an append-only audit log in SQLite. Plugins run with minimal permissions by default; elevated permissions require human approval through the `/api/permissions` endpoints. Network access from plugins is restricted to a configurable host whitelist.
 
-**Production (Full Icon Embedding):**
-```bash
-unset VERS_SKIP_ICON_EMBED
-cargo build --release
-```
+## Documentation
 
-## 🎯 Current Status (Phase 6 Complete)
+- [Architecture](docs/ARCHITECTURE.md) — Design principles, event flow, security model
+- [Development](docs/DEVELOPMENT.md) — Coding standards, guardrails, PR process
+- [Changelog](docs/CHANGELOG.md) — Development history
+- [Plugin Macros](exiv_macros/README.md) — `#[exiv_plugin]` usage and build optimization
 
-**Version:** 0.1.0-alpha.1
-**Code Quality:** 90+/100 (A)
-**Design Compliance:** 95+/100 (A)
+## License
 
-**Recent Achievements:**
-- ✅ Human-in-the-loop permission system
-- ✅ Rate limiting & DoS protection
-- ✅ Comprehensive audit logging
-- ✅ Self-healing Python bridge
-- ✅ Build optimization (VERS_SKIP_ICON_EMBED)
-- ✅ International accessibility (35 comments translated)
+Business Source License 1.1. Converts to MIT on 2028-02-14.
 
-## 🤝 Contributing
+You can freely use Exiv for plugin development, internal tools, consulting, education, and small-scale commercial projects. Large-scale commercial deployment (>$100k revenue, >1,000 users, >50 employees, or SaaS) requires prior approval from the licensor. See [LICENSE](LICENSE) for the full terms.
 
-See [DEVELOPMENT.md](docs/DEVELOPMENT.md) for:
-- Coding standards and style guide
-- Development guardrails (DO NOT list)
-- Testing requirements
-- Pull request process
+## Links
 
-## 📄 License
-
-[Specify license here - MIT/Apache 2.0/etc.]
-
-## 🔗 Links
-
-- **Documentation**: [docs/README.md](docs/README.md)
-- **Dashboard**: http://localhost:8081 (when running)
-- **Issue Tracker**: [GitHub Issues]
-- **Discussions**: [GitHub Discussions]
+- [GitHub Issues](https://github.com/Exiv-ai/Exiv/issues)
+- [GitHub Discussions](https://github.com/Exiv-ai/Exiv/discussions)
+- [Documentation](docs/README.md)

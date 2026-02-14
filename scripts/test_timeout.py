@@ -3,7 +3,7 @@ Test script for Python Bridge timeout testing
 """
 import time
 
-VERS_MANIFEST = {
+EXIV_MANIFEST = {
     "id": "test.timeout",
     "name": "Timeout Test Script",
     "description": "Script for testing timeout functionality",
