@@ -19,20 +19,31 @@ Exiv (Existence × Virtual) is an AI agent orchestration platform written in Rus
 
 ### Pre-built Binary
 
-Download and install the latest release with a single command:
+**Linux / macOS:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/scripts/install.sh | bash
 ```
 
-This detects your platform, downloads the correct binary, and runs the built-in installer. Customize with environment variables:
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/Exiv-ai/Exiv/master/scripts/install.ps1 | iex
+```
+
+Both scripts detect your platform, download the correct binary, verify its checksum, and run the built-in installer. Customize with environment variables:
 
 ```bash
+# Linux / macOS
 EXIV_PREFIX=/usr/local EXIV_SERVICE=true \
   curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/scripts/install.sh | bash
 ```
 
-Windows users: download the `.zip` from [Releases](https://github.com/Exiv-ai/Exiv/releases) and run `exiv_system.exe install --service`.
+```powershell
+# Windows
+$env:EXIV_PREFIX = "C:\Exiv"; $env:EXIV_SERVICE = "true"
+irm https://raw.githubusercontent.com/Exiv-ai/Exiv/master/scripts/install.ps1 | iex
+```
 
 ### From Source
 
