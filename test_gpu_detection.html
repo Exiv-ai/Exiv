@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GPU Detection Test</title>
+</head>
+<body>
+    <h1>GPU Detection Test for RDNA3 (7900 XTX)</h1>
+    <pre id="output"></pre>
+
+    <script>
+        const output = document.getElementById('output');
+
+        function log(msg) {
+            output.textContent += msg + '\n';
+            console.log(msg);
+        }
+
+        // Test 1: Basic WebGL2 support
+        log('=== Test 1: WebGL2 Support ===');
+        const canvas = document.createElement('canvas');
+        let gl = canvas.getContext('webgl2', {
+            failIfMajorPerformanceCaveat: true,
+            powerPreference: 'high-performance',
+        });
+
+        if (!gl) {
+            log('❌ WebGL2 with high-performance failed');
+            log('Retrying without failIfMajorPerformanceCaveat...');
+            gl = canvas.getContext('webgl2');
+            if (!gl) {
+                log('❌ WebGL2 not available at all');
+            } else {
+                log('⚠️ WebGL2 available but with performance caveat');
+            }
+        } else {
+            log('✅ WebGL2 with high-performance succeeded');
+        }
+
+        if (gl) {
+            // Test 2: Get renderer info
+            log('\n=== Test 2: GPU Renderer Info ===');
+            const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+            if (debugInfo) {
+                const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || 'unknown';
+                const vendor = gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) || 'unknown';
+                log('Renderer: ' + renderer);
+                log('Vendor: ' + vendor);
+
+                // Test 3: Check against blocklist/warnlist
+                log('\n=== Test 3: Blocklist/Warnlist Check ===');
+                const GPU_BLOCKLIST = [
+                    /swiftshader/i,
+                    /llvmpipe/i,
+                    /software/i,
+                    /microsoft basic/i,
+                ];
+                const GPU_WARNLIST = [
+                    /radeon.*r9\s*2/i,
+                    /radeon.*r7\s*2/i,
+                    /radeon.*hd\s*7/i,
+                    /radeon.*r9\s*3[78]/i,
+                    /mali-t/i,
+                    /intel.*hd.*4[0-9]{3}/i,
+                ];
+
+                let blocked = false;
+                for (const pattern of GPU_BLOCKLIST) {
+                    if (pattern.test(renderer)) {
+                        log('❌ BLOCKED by pattern: ' + pattern);
+                        blocked = true;
+                    }
+                }
+
+                let warned = false;
+                for (const pattern of GPU_WARNLIST) {
+                    if (pattern.test(renderer)) {
+                        log('⚠️ WARNED by pattern: ' + pattern);
+                        warned = true;
+                    }
+                }
+
+                if (!blocked && !warned) {
+                    log('✅ GPU is COMPATIBLE (not in blocklist/warnlist)');
+                    log('Expected: GPU delegate should be used');
+                } else if (blocked) {
+                    log('Result: CPU delegate will be used (BLOCKED)');
+                } else if (warned) {
+                    log('Result: CPU delegate will be used (WARNED)');
+                }
+            } else {
+                log('❌ WEBGL_debug_renderer_info extension not available');
+            }
+
+            // Test 4: WebGL capabilities
+            log('\n=== Test 4: WebGL Capabilities ===');
+            log('Max Texture Size: ' + gl.getParameter(gl.MAX_TEXTURE_SIZE));
+            log('Max Vertex Attribs: ' + gl.getParameter(gl.MAX_VERTEX_ATTRIBS));
+            log('Max Viewport Dims: ' + gl.getParameter(gl.MAX_VIEWPORT_DIMS));
+
+            // Release context
+            const loseCtx = gl.getExtension('WEBGL_lose_context');
+            if (loseCtx) loseCtx.loseContext();
+        }
+
+        log('\n=== Test Complete ===');
+        log('Copy this output and share with developer for debugging.');
+    </script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Node.js
+node_modules/
+dist/
+.eslintcache
+compiled-tailwind.css
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# VERS-OS Specific
+*.log
+*.db
+*.db-shm
+*.db-wal
+.env
