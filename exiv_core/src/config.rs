@@ -38,7 +38,7 @@ impl AppConfig {
         let admin_api_key = env::var("EXIV_API_KEY").ok();
 
         let default_agent_id =
-            env::var("DEFAULT_AGENT_ID").unwrap_or_else(|_| "agent.karin".to_string());
+            env::var("DEFAULT_AGENT_ID").unwrap_or_else(|_| "agent.exiv_default".to_string());
 
         let plugin_event_timeout_secs = env::var("PLUGIN_EVENT_TIMEOUT_SECS")
             .unwrap_or_else(|_| "30".to_string())
@@ -76,7 +76,7 @@ impl AppConfig {
         };
 
         let update_repo = env::var("EXIV_UPDATE_REPO")
-            .unwrap_or_else(|_| "karin-project/vers-system".to_string());
+            .unwrap_or_else(|_| "Exiv-ai/Exiv".to_string());
 
         let consensus_engines_str = env::var("CONSENSUS_ENGINES")
             .unwrap_or_else(|_| "mind.deepseek,mind.cerebras".to_string());

@@ -6,7 +6,7 @@ use exiv_shared::{
 #[exiv_plugin(
     name = "hal.cursor",
     kind = "HAL",
-    description = "High-precision dot cursor with fluid motion trails from Karin System 1.6.12.",
+    description = "High-precision dot cursor with fluid motion trails.",
     version = "1.6.12",
     category = "Tool",
     permissions = ["InputControl"],

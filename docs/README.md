@@ -9,13 +9,13 @@ Documentation for Exiv design, development, and quality management.
 - **[CHANGELOG.md](CHANGELOG.md)** - Project change history (Phase 1 → Phase 6)
 - **[CODE_QUALITY_AUDIT.md](CODE_QUALITY_AUDIT.md)** - Code quality audit report (Score: 82/100 → 90+/100)
 
-## Current Status (2026-02-13)
+## Current Status (2026-02-14)
 
 **Version:** 0.1.0-alpha.1
-**Phase:** 6 Complete ✅
+**Phase:** 6 Complete
 **Code Quality:** 90+/100 (A)
 **Design Principles Compliance:** 95+/100 (A)
-**Test Coverage:** 45 tests (34 unit + 11 integration)
+**Test Coverage:** 78 tests (39 unit + 39 integration)
 
 ### Recent Achievements (Phase 6)
 
@@ -30,10 +30,10 @@ Documentation for Exiv design, development, and quality management.
 
 | File | Description | Last Updated |
 |------|-------------|--------------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Design principles, security framework, plugin architecture | 2026-02-13 |
-| [DEVELOPMENT.md](DEVELOPMENT.md) | Development guidelines, guardrails, coding standards | 2026-02-13 |
-| [CODE_QUALITY_AUDIT.md](CODE_QUALITY_AUDIT.md) | Quality audit report and improvement tracking | 2026-02-13 |
-| [CHANGELOG.md](CHANGELOG.md) | Comprehensive change history across all phases | 2026-02-13 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Design principles, security framework, plugin architecture | 2026-02-14 |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Development guidelines, guardrails, coding standards | 2026-02-14 |
+| [CODE_QUALITY_AUDIT.md](CODE_QUALITY_AUDIT.md) | Quality audit report and improvement tracking | 2026-02-14 |
+| [CHANGELOG.md](CHANGELOG.md) | Comprehensive change history across all phases | 2026-02-14 |
 
 ## Plugin Documentation
 
@@ -46,8 +46,8 @@ Documentation for Exiv design, development, and quality management.
 
 ```bash
 # Clone repository
-git clone <repository-url>
-cd exiv_project
+git clone https://github.com/Exiv-ai/Exiv.git
+cd Exiv
 
 # Build and run (development)
 cargo build
@@ -67,23 +67,7 @@ cargo build
 
 ## API Endpoints
 
-**Core:**
-- `GET /api/metrics` - System metrics
-- `GET /api/plugins` - Plugin list
-- `GET /api/agents` - Agent list
-- `GET /api/history` - Event history
-- `GET /api/events` - SSE stream
-
-**Admin (Rate Limited):**
-- `POST /api/system/shutdown` - Graceful shutdown
-- `POST /api/plugins/apply` - Bulk enable/disable
-- `POST /api/plugins/:id/config` - Update configuration
-- `POST /api/plugins/:id/permissions/grant` - Grant permission
-
-**Human-in-the-Loop (Phase 6):**
-- `GET /api/permissions/pending` - Pending permission requests
-- `POST /api/permissions/:id/approve` - Approve request
-- `POST /api/permissions/:id/deny` - Deny request
+See the main [README](../README.md#api) for the full endpoint reference.
 
 ## Contributing
 

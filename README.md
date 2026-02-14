@@ -3,7 +3,7 @@
 Exiv (Existence × Virtual) is an AI agent orchestration platform written in Rust. It provides a plugin-based kernel where multiple AI engines, tools, and services communicate through an asynchronous event bus. An admin can control plugin permissions at runtime through a human-in-the-loop approval system.
 
 [![Version](https://img.shields.io/badge/version-0.1.0--alpha.1-blue)]()
-[![Tests](https://img.shields.io/badge/tests-76%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-78%20passing-brightgreen)]()
 [![License](https://img.shields.io/badge/license-BSL%201.1%20→%20MIT%202028-blue)](LICENSE)
 
 ## Features
@@ -54,17 +54,25 @@ docs/               Architecture docs, changelog, development guide
 
 ## Plugins
 
+**Rust plugins** (compiled as crates):
+
 | ID | Type | Description |
 |----|------|-------------|
 | `mind.deepseek` | Reasoning | DeepSeek R1 |
 | `mind.cerebras` | Reasoning | Cerebras Llama 3.3 70B |
-| `core.ks22` | Memory | Knowledge Store 2.2 — persistent key-value memory with chronological recall |
-| `core.moderator` | Tool | Content moderation |
+| `core.ks22` | Reasoning | Knowledge Store 2.2 — persistent key-value memory with chronological recall |
+| `core.moderator` | Reasoning | Consensus moderator for collective intelligence |
 | `hal.cursor` | HAL | Mouse/keyboard control interface |
-| `python.analyst` | Tool | Python code execution via bridge subprocess |
-| `python.gaze` | Tool | Gaze tracking (mock mode) |
-| `adapter.mcp` | Tool | Model Context Protocol client |
-| `vision.screen` | Tool | Screen capture |
+| `bridge.python` | Reasoning | Python subprocess bridge with self-healing restart |
+| `adapter.mcp` | Skill | Model Context Protocol client |
+| `vision.screen` | Vision | Screen capture and analysis |
+
+**Python plugins** (loaded through `bridge.python`):
+
+| ID | Type | Description |
+|----|------|-------------|
+| `python.analyst` | Reasoning | Data analysis agent with external data fetching |
+| `python.gaze` | Vision | Webcam-based eye tracking via MediaPipe |
 
 ## API
 
@@ -74,8 +82,14 @@ docs/               Architecture docs, changelog, development guide
 |--------|------|-------------|
 | GET | `/api/metrics` | System metrics |
 | GET | `/api/plugins` | Plugin list with manifests |
+| GET | `/api/plugins/:id/config` | Plugin configuration |
 | GET | `/api/agents` | Agent configurations |
+| GET | `/api/history` | Event history |
+| GET | `/api/memories` | Memory entries |
 | GET | `/api/events` | SSE event stream |
+| GET | `/api/permissions/pending` | Pending permission requests |
+| GET | `/api/system/version` | Current version info |
+| GET | `/api/system/update/check` | Check for updates |
 | POST | `/api/chat` | Send message to an agent |
 
 **Admin endpoints** (rate limited to 10 req/s, requires `X-API-Key` header):
@@ -83,9 +97,13 @@ docs/               Architecture docs, changelog, development guide
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/system/shutdown` | Graceful shutdown |
+| POST | `/api/system/update/apply` | Apply pending update |
+| POST | `/api/plugins/apply` | Bulk enable/disable plugins |
 | POST | `/api/plugins/:id/config` | Update plugin config |
 | POST | `/api/plugins/:id/permissions/grant` | Grant permission to plugin |
-| GET | `/api/permissions/pending` | List pending permission requests |
+| POST | `/api/agents` | Create agent |
+| POST | `/api/agents/:id` | Update agent |
+| POST | `/api/events/publish` | Publish event to bus |
 | POST | `/api/permissions/:id/approve` | Approve a request |
 | POST | `/api/permissions/:id/deny` | Deny a request |
 
@@ -101,12 +119,18 @@ Copy `.env.example` to `.env` and edit as needed.
 | `DEEPSEEK_API_KEY` | (none) | DeepSeek API key |
 | `CEREBRAS_API_KEY` | (none) | Cerebras API key |
 | `CONSENSUS_ENGINES` | (none) | Comma-separated engine IDs for consensus mode |
-| `DEFAULT_AGENT_ID` | `agent.karin` | Default agent for `/api/chat` |
+| `DEFAULT_AGENT_ID` | `agent.exiv_default` | Default agent for `/api/chat` |
 | `EXIV_SKIP_ICON_EMBED` | (none) | Set to `1` to skip icon embedding during dev builds |
+| `RUST_LOG` | `info` | Log level filter |
+| `MAX_EVENT_DEPTH` | `10` | Maximum event cascading depth |
+| `PLUGIN_EVENT_TIMEOUT_SECS` | `30` | Plugin event handler timeout |
+| `CORS_ORIGINS` | (none) | Allowed CORS origins (comma-separated) |
+| `ALLOWED_HOSTS` | (none) | Network whitelist for plugin access |
+| `EXIV_UPDATE_REPO` | (none) | GitHub `owner/repo` for update distribution |
 
 ## Testing
 
-76 tests (39 unit, 37 integration/plugin).
+78 tests (39 unit, 39 integration/plugin).
 
 ```bash
 cargo test                              # all tests

@@ -175,7 +175,7 @@ DATABASE_URL=sqlite:${INSTALL_DIR}/data/exiv_memories.db
 # CONSENSUS_ENGINES=mind.deepseek,mind.cerebras
 
 # --- Agent ---
-# DEFAULT_AGENT_ID=agent.karin
+# DEFAULT_AGENT_ID=agent.exiv_default
 
 # --- Tuning ---
 # MAX_EVENT_DEPTH=10
@@ -185,7 +185,7 @@ DATABASE_URL=sqlite:${INSTALL_DIR}/data/exiv_memories.db
 # --- Remote Update (Principle #8: HITL) ---
 # GitHub repository for update distribution (owner/repo).
 # Used by GET /api/system/update/check and POST /api/system/update/apply.
-# EXIV_UPDATE_REPO=karin-project/exiv-system
+# EXIV_UPDATE_REPO=Exiv-ai/Exiv
 
 # --- Network ---
 # CORS origins (comma-separated). The embedded dashboard is served from

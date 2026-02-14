@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS agents (
 
 -- Initial Seeds
 INSERT OR IGNORE INTO agents (id, name, description, default_engine_id, status, metadata) 
-VALUES ('agent.karin', 'Karin', 'Vers-native Karin Agent / General Intelligence', 'mind.cerebras', 'online', '{}');
+VALUES ('agent.exiv_default', 'Exiv Assistant', 'The primary system assistant.', 'mind.cerebras', 'online', '{}');
 
 INSERT OR IGNORE INTO agents (id, name, description, default_engine_id, status, metadata) 
 VALUES ('agent.analyst', 'Python Analyst', 'Advanced Data Analyst powered by Python Bridge', 'bridge.python', 'online', '{"preferred_memory": "core.ks2_2"}');

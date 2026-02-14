@@ -30,8 +30,7 @@ TARGET_BIN="./target/debug/exiv_system"
 
 echo "🚀 Launching Exiv via Guardian on port ${PORT}..."
 # Guardianはカレントディレクトリのバイナリを監視・実行する
-# 今回は guardian.rs の仕様に合わせ、AI Karin パスとして exiv_core を認識させる
-# (バイナリ更新監視機能を活用するため)
+# Guardian monitors the binary and auto-restarts on crash or update.
 
 nohup ./exiv_guardian > kernel.log 2>&1 &
 echo "✅ Exiv System is now under Guardian protection (Port: ${PORT})."

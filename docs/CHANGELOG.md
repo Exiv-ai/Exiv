@@ -128,7 +128,7 @@ test result: ok. 11 passed; 0 failed
 
 2. **Inventory による分散型プラグイン登録 (原則1)**: `inventory` クレートを採用。Kernel の `managers.rs` から具体的なプラグイン依存を排除し、「プラグ・アンド・プレイ」を実現。
 
-3. **デフォルトエージェントIDの構成化 (原則2)**: ハードコードされた `"agent.karin"` を `AppConfig` + 環境変数 `DEFAULT_AGENT_ID` に外部化。
+3. **デフォルトエージェントIDの構成化 (原則2)**: ハードコードされたデフォルトエージェントIDを `AppConfig` + 環境変数 `DEFAULT_AGENT_ID` に外部化。
 
 4. **完全アクターモデル化 (原則3)**: `MessageRouter` を廃止し `SystemHandler` (Internal Plugin) として再定義。`EventProcessor` は純粋なイベント転送機に。
 

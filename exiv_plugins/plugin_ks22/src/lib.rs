@@ -9,7 +9,7 @@ use exiv_shared::{
 #[exiv_plugin(
     name = "core.ks22", 
     kind = "Reasoning",
-    description = "Standard memory and reasoning logic from Karin System 2.1.",
+    description = "Persistent key-value memory with chronological recall.",
     version = "0.1.0",
     category = "Memory",
     permissions = ["MemoryRead", "MemoryWrite"],
