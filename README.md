@@ -161,3 +161,7 @@ You can freely use Exiv for plugin development, internal tools, consulting, educ
 - [GitHub Issues](https://github.com/Exiv-ai/Exiv/issues)
 - [GitHub Discussions](https://github.com/Exiv-ai/Exiv/discussions)
 - [Documentation](docs/README.md)
+
+## Note
+
+Most of the code and documentation in this project was written with the assistance of AI. If you find any issues, inaccuracies, or bugs, please open an [issue](https://github.com/Exiv-ai/Exiv/issues) and we will address it.
