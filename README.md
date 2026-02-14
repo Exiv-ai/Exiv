@@ -15,30 +15,52 @@ Exiv (Existence × Virtual) is an AI agent orchestration platform written in Rus
 - **Proc-macro SDK** — The `#[exiv_plugin]` macro generates plugin manifests, factory boilerplate, and capability registration at compile time.
 - **Web dashboard** — React + TypeScript UI served from the kernel binary via `rust-embed`. Connects to the kernel's SSE stream for real-time updates.
 
-## Quick Start
+## Installation
+
+### Pre-built Binary
+
+Download and install the latest release with a single command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/scripts/install.sh | bash
+```
+
+This detects your platform, downloads the correct binary, and runs the built-in installer. Customize with environment variables:
+
+```bash
+EXIV_PREFIX=/usr/local EXIV_SERVICE=true \
+  curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/scripts/install.sh | bash
+```
+
+Windows users: download the `.zip` from [Releases](https://github.com/Exiv-ai/Exiv/releases) and run `exiv_system.exe install --service`.
+
+### From Source
 
 ```bash
 git clone https://github.com/Exiv-ai/Exiv.git
 cd Exiv
 
+cargo build --release
+./target/release/exiv_system install --prefix /opt/exiv --service
+```
+
+For development (without installing):
+
+```bash
 cargo build
 cargo run --package exiv_core
 ```
 
+### Management
+
+```bash
+exiv_system service start       # start the service
+exiv_system service stop        # stop the service
+exiv_system service status      # check status
+exiv_system uninstall           # remove installation
+```
+
 The dashboard is served at http://localhost:8081.
-
-To run tests:
-
-```bash
-cargo test
-```
-
-For optimized release builds:
-
-```bash
-cargo build --release
-cargo run --package exiv_core --release
-```
 
 ## Project Structure
 
