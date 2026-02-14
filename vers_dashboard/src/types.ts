@@ -38,7 +38,8 @@ export interface PluginManifest {
   version: string;
   service_type: ServiceType;
   tags: string[];
-  is_configured: bool;
+  is_active: boolean;
+  is_configured: boolean;
   required_config_keys: string[];
   action_icon?: string;
   action_target?: string;
@@ -52,7 +53,8 @@ export type ServiceType =
   | 'Skill'
   | 'Vision'
   | 'Action'
-  | 'Memory';
+  | 'Memory'
+  | 'HAL';
 
 export interface ColorVisionData {
   captured_at: string;

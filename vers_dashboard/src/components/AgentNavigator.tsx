@@ -16,6 +16,7 @@ interface AgentNavigatorProps {
   activeAgentId?: string;
   onSelectAgent: (id: string) => void;
   onSelectSystem: () => void;
+  onAddAgent: () => void;
   systemActive: boolean;
 }
 
@@ -34,6 +35,7 @@ export const AgentNavigator: React.FC<AgentNavigatorProps> = ({
   activeAgentId,
   onSelectAgent,
   onSelectSystem,
+  onAddAgent,
   systemActive
 }) => {
   return (
@@ -99,7 +101,11 @@ export const AgentNavigator: React.FC<AgentNavigatorProps> = ({
         })}
 
         {/* Add Agent Button */}
-        <button className="p-3 rounded-2xl text-white/20 hover:text-white/60 hover:bg-white/5 border border-white/5 border-dashed transition-all duration-300">
+        <button 
+          onClick={onAddAgent}
+          className="p-3 rounded-2xl text-white/20 hover:text-white/60 hover:bg-white/5 border border-white/5 border-dashed transition-all duration-300"
+          title="Initialize New Agent"
+        >
           <Plus size={24} />
         </button>
       </div>

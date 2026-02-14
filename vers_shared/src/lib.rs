@@ -1,11 +1,14 @@
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-use chrono::{DateTime, Utc};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::any::Any;
 use std::collections::HashMap;
+use std::sync::Arc;
+use uuid::Uuid;
 
 /// VERSプラットフォーム内での一意の識別子（Agent, Plugin, Session等）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct VersId(Uuid);
 
 impl std::fmt::Display for VersId {
@@ -18,58 +21,70 @@ impl VersId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
+
+    pub fn from_name(name: &str) -> Self {
+        let namespace = Uuid::NAMESPACE_DNS;
+        Self(Uuid::new_v5(&namespace, name.as_bytes()))
+    }
 }
 
-/// エージェントやプラグインが要求・提供する「権限/能力」
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Capability {
-    /// 視覚情報へのアクセス (Color)
+pub enum CapabilityType {
+    /// 思考・推論能力 (ReasoningEngine)
+    Reasoning,
+    /// 記憶・永続化能力 (MemoryProvider)
+    Memory,
+    /// 外部通信・入出力能力 (CommunicationAdapter)
+    Communication,
+    /// 特定タスク実行能力 (Tool)
+    Tool,
+    /// 視覚・画像処理能力
+    Vision,
+    /// 物理/ハードウェア操作能力
+    HAL,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Permission {
     VisionRead,
-    /// 入力デバイスの操作 (Hand)
     InputControl,
-    /// ファイルシステムへのアクセス
     FileRead,
     FileWrite,
-    /// ネットワーク通信
     NetworkAccess,
-    /// サブプロセスの実行（コンパイラ等）
     ProcessExecution,
-    /// 長期記憶へのアクセス (Karin)
     MemoryRead,
     MemoryWrite,
 }
 
-/// プラグインが提供する「サービス」の分類
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServiceType {
-    /// 通信アダプター (Discord, Slack等)
     Communication,
-    /// 思考エンジン (Chat, Reasoning, Research)
     Reasoning,
-    /// ツール/技能 (Search, Calculation, Scraping)
     Skill,
-    /// 視覚フレームワーク (Color)
     Vision,
-    /// 操作フレームワーク (Hand)
     Action,
-    /// 記憶システム (Karin)
     Memory,
+    HAL,
 }
 
-/// プラグインの自己紹介書
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     pub id: VersId,
     pub name: String,
+    pub description: String,
     pub version: String,
     pub service_type: ServiceType,
-    /// このプラグインが動作するために必要な権限
-    pub required_capabilities: Vec<Capability>,
-    /// このプラグインが提供する具体的な機能（Tool）のリスト
+    pub tags: Vec<String>,
+    pub is_active: bool,
+    pub is_configured: bool,
+    pub required_config_keys: Vec<String>,
+    pub action_icon: Option<String>,
+    pub action_target: Option<String>,
+    pub required_permissions: Vec<Permission>,
+    pub provided_capabilities: Vec<CapabilityType>,
     pub provided_tools: Vec<String>,
 }
 
-/// メッセージの送信元
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessageSource {
     User { id: String, name: String },
@@ -77,7 +92,6 @@ pub enum MessageSource {
     System,
 }
 
-/// プラットフォーム内を流れる標準メッセージ
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersMessage {
     pub id: VersId,
@@ -85,7 +99,6 @@ pub struct VersMessage {
     pub target_agent: Option<VersId>,
     pub content: String,
     pub timestamp: DateTime<Utc>,
-    /// メタデータ（感情状態、信頼スコアなど）
     pub metadata: HashMap<String, String>,
 }
 
@@ -102,7 +115,6 @@ impl VersMessage {
     }
 }
 
-/// 汎用操作フレームワーク「Hand」のための抽象アクション
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HandAction {
     MouseMove { x: i32, y: i32 },
@@ -111,14 +123,10 @@ pub enum HandAction {
     Wait { ms: u32 },
 }
 
-/// 汎用視覚フレームワーク「Color」のための抽象データ
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColorVisionData {
-    /// タイムスタンプ
     pub captured_at: DateTime<Utc>,
-    /// 認識されたオブジェクトやUI要素のリスト（セマンティック情報）
     pub detected_elements: Vec<DetectedElement>,
-    /// 画像データの参照（必要に応じて）
     pub image_ref: Option<String>,
 }
 
@@ -130,9 +138,41 @@ pub struct DetectedElement {
     pub attributes: HashMap<String, String>,
 }
 
-/// 全てのプラグインツールが実装すべきインターフェース
+/// 全てのプラグインが実装するベースとなるマーカートレイト
 #[async_trait]
-pub trait Tool: Send + Sync {
+pub trait Plugin: Any + Send + Sync {
+    fn manifest(&self) -> PluginManifest;
+
+    /// システムイベントの購読（デフォルトは何もしない）
+    /// 戻り値としてイベントを返すと、Kernelによって再配信される
+    async fn on_event(&self, _event: &VersEvent) -> anyhow::Result<Option<VersEvent>> {
+        Ok(None)
+    }
+
+    /// エージェント初期化時のフック（メタデータの注入など）
+    async fn on_agent_init(&self, _agent: &mut AgentMetadata) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    // Cast methods for safe trait object usage
+    fn as_any(&self) -> &dyn Any;
+
+    fn as_tool(&self) -> Option<&dyn Tool> {
+        None
+    }
+    fn as_communication(&self) -> Option<&dyn CommunicationAdapter> {
+        None
+    }
+    fn as_reasoning(&self) -> Option<&dyn ReasoningEngine> {
+        None
+    }
+    fn as_memory(&self) -> Option<&dyn MemoryProvider> {
+        None
+    }
+}
+
+#[async_trait]
+pub trait Tool: Plugin {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<serde_json::Value>;
@@ -141,52 +181,81 @@ pub trait Tool: Send + Sync {
     }
 }
 
-/// 外部通信アダプターのトレイト
 #[async_trait]
-pub trait CommunicationAdapter: Send + Sync {
+pub trait CommunicationAdapter: Plugin {
     fn name(&self) -> &str;
-    async fn start(&self, event_sender: tokio::sync::mpsc::Sender<VersEvent>) -> anyhow::Result<()>;
+    async fn start(&self, event_sender: tokio::sync::mpsc::Sender<VersEvent>)
+        -> anyhow::Result<()>;
     async fn send(&self, target_user_id: &str, content: &str) -> anyhow::Result<()>;
 }
 
-/// 思考エンジン（LLM連携）のトレイト
 #[async_trait]
-pub trait ReasoningEngine: Send + Sync {
+pub trait ReasoningEngine: Plugin {
     fn name(&self) -> &str;
-    /// メッセージと文脈を受け取り、回答を生成する
-    async fn think(&self, agent: &AgentMetadata, message: &VersMessage, context: Vec<VersMessage>) -> anyhow::Result<String>;
+    async fn think(
+        &self,
+        agent: &AgentMetadata,
+        message: &VersMessage,
+        context: Vec<VersMessage>,
+    ) -> anyhow::Result<String>;
 }
 
-/// 記憶システム（Karin KS2.5等）のトレイト
 #[async_trait]
-pub trait MemoryProvider: Send + Sync {
+pub trait MemoryProvider: Plugin {
     fn name(&self) -> &str;
-    /// 記憶の保存
     async fn store(&self, agent_id: VersId, message: VersMessage) -> anyhow::Result<()>;
-    /// 関連する記憶の検索
-    async fn recall(&self, agent_id: VersId, query: &str, limit: usize) -> anyhow::Result<Vec<VersMessage>>;
+    async fn recall(
+        &self,
+        agent_id: VersId,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<VersMessage>>;
 }
 
-/// システム内を流れるイベント
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
 pub enum VersEvent {
-    /// メッセージ受信
     MessageReceived(VersMessage),
-    /// 視覚情報の更新 (Colorからのイベント)
     VisionUpdated(ColorVisionData),
-    /// 操作命令の発生 (Handへのリクエスト)
-    ActionRequested(HandAction),
-    /// システム通知
+    /// プラグインからのアクション要求（権限チェック対象）
+    ActionRequested {
+        requester: VersId,
+        action: HandAction,
+    },
     SystemNotification(String),
+    /// プラグインに対して思考（推論）を要求する
+    ThoughtRequested {
+        agent: AgentMetadata,
+        message: VersMessage,
+        context: Vec<VersMessage>,
+    },
+    /// プラグインからの思考結果
+    ThoughtResponse {
+        agent_id: VersId,
+        content: String,
+        source_message_id: VersId,
+    },
 }
 
-/// エージェント（人格）の定義
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMetadata {
     pub id: VersId,
     pub name: String,
     pub description: String,
-    /// このエージェントが持つ権限
-    pub capabilities: Vec<Capability>,
+    pub status: String,
+    pub required_capabilities: Vec<CapabilityType>,
     pub plugin_bindings: Vec<VersId>,
+    pub metadata: HashMap<String, String>,
+}
+
+pub struct PluginConfig {
+    pub id: VersId,
+    pub config_values: HashMap<String, String>,
+}
+
+#[async_trait]
+pub trait PluginFactory: Send + Sync {
+    fn name(&self) -> &str;
+    fn service_type(&self) -> ServiceType;
+    async fn create(&self, config: PluginConfig) -> anyhow::Result<Arc<dyn Plugin>>;
 }

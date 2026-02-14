@@ -36,7 +36,7 @@ export const VersLayout: React.FC = () => {
   const activeAgent = agents.find(a => a.id === activeAgentId);
 
   return (
-    <div className="flex h-screen w-screen bg-[#050505] text-white overflow-hidden font-sans select-none">
+    <div className="flex h-full w-full bg-[#050505] text-white overflow-hidden font-sans select-none">
       {/* Sidebar: Agent Navigator */}
       <AgentNavigator 
         agents={agents}
@@ -46,6 +46,7 @@ export const VersLayout: React.FC = () => {
           setSystemActive(false);
         }}
         onSelectSystem={() => setSystemActive(true)}
+        onAddAgent={() => console.log('Add agent clicked')}
         systemActive={systemActive}
       />
 

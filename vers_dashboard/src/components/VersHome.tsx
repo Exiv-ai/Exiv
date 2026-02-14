@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, Suspense, lazy } from 'react';
-import { Activity, Database, MessageSquare, Puzzle, Settings, ArrowLeft, Cpu } from 'lucide-react';
+import { Activity, Database, MessageSquare, Puzzle, Settings, ArrowLeft, Cpu, User as UserIcon } from 'lucide-react';
 import { InteractiveGrid } from '../components/InteractiveGrid';
 import { GlassWindow } from '../components/GlassWindow';
 import { AgentNavigator } from '../components/AgentNavigator';
@@ -8,6 +8,8 @@ import { AgentMetadata } from '../types';
 
 const StatusCore = lazy(() => import('../components/StatusCore').then(m => ({ default: (m as any).StatusCore })));
 const MemoryCore = lazy(() => import('../components/MemoryCore').then(m => ({ default: (m as any).MemoryCore })));
+const AgentCreator = lazy(() => import('../components/AgentCreator').then(m => ({ default: (m as any).AgentCreator })));
+const VersPluginManager = lazy(() => import('../components/VersPluginManager').then(m => ({ default: (m as any).VersPluginManager })));
 
 interface WindowInstance {
   id: string;
@@ -18,25 +20,33 @@ interface WindowInstance {
   zIndex: number;
 }
 
-const MOCK_AGENTS: AgentMetadata[] = [
-  { id: 'agent-karin', name: 'Karin', description: 'General Purpose AI Persona', capabilities: ['MemoryRead', 'MemoryWrite'], status: 'online' },
-  { id: 'agent-color', name: 'Color', description: 'Universal Vision Framework', capabilities: ['VisionRead'], status: 'busy' },
-  { id: 'agent-hand', name: 'Hand', description: 'Universal Action Framework', capabilities: ['InputControl', 'FileWrite'], status: 'online' }
-];
-
 export function VersHome() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [windows, setWindows] = useState<WindowInstance[]>([]);
   const [nextZ, setNextZ] = useState(100);
   const [activeMainView, setActiveMainView] = useState<string | null>(null);
   const [systemActive, setSystemActive] = useState(false);
-  const [activeAgentId, setActiveAgentId] = useState<string>(MOCK_AGENTS[0].id);
+  const [agents, setAgents] = useState<AgentMetadata[]>([]);
+  const [activeAgentId, setActiveAgentId] = useState<string>('');
+
+  const fetchAgents = () => {
+    fetch('/api/agents').then(r => r.json()).then(data => {
+      setAgents(data);
+      if (data.length > 0 && !activeAgentId) {
+        setActiveAgentId(data[0].id);
+      }
+    }).catch(console.error);
+  };
+
+  useEffect(() => {
+    fetchAgents();
+  }, []);
 
   const menuItems = [
     { id: 'status', label: 'STATUS', icon: Activity, disabled: false },
     { id: 'memory', label: 'MEMORY', icon: Database, disabled: false },
     { id: 'sandbox', label: 'VERS', icon: MessageSquare, disabled: false },
-    { id: 'plugin', label: 'PLUGIN', icon: Puzzle, disabled: true },
+    { id: 'plugin', label: 'PLUGIN', icon: Puzzle, disabled: false },
     { id: 'system', label: 'SYSTEM', icon: Settings, disabled: false },
   ];
 
@@ -67,26 +77,29 @@ export function VersHome() {
       <InteractiveGrid />
       
       {/* 2.x Agent Navigator - Integrated into 1.6 style */}
-      <AgentNavigator 
-        agents={MOCK_AGENTS}
-        activeAgentId={activeAgentId}
-        onSelectAgent={(id) => {
-          setActiveAgentId(id);
-          setSystemActive(false);
-          setActiveMainView('sandbox');
-        }}
-        onSelectSystem={() => {
-          setSystemActive(true);
-          setActiveMainView('system_log');
-        }}
-        systemActive={systemActive}
-      />
+      <div className="relative z-20 h-full">
+        <AgentNavigator 
+          agents={agents}
+          activeAgentId={activeAgentId}
+          onSelectAgent={(id) => {
+            setActiveAgentId(id);
+            setSystemActive(false);
+            setActiveMainView('sandbox');
+          }}
+          onSelectSystem={() => {
+            setSystemActive(true);
+            setActiveMainView('system_log');
+          }}
+          onAddAgent={() => openWindow({ id: 'agent', label: 'AGENT INITIALIZER' })}
+          systemActive={systemActive}
+        />
+      </div>
 
       <div className="flex-1 relative flex flex-col items-center justify-center p-8 overflow-hidden">
         {/* Logo / Header (1.6.12 Style) */}
         <div className="absolute top-12 text-center z-10">
           <h1 className="text-4xl font-black tracking-[0.2em] text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]">
-            VERS OS <span className="text-xl font-black tracking-widest text-[#2e4de6] ml-1">v0.1.0</span>
+            VERS OS <span className="text-xl font-black tracking-widest text-[#2e4de6] ml-1">v0.3.0</span>
           </h1>
           <p className="text-[10px] text-white/40 mt-3 font-mono uppercase tracking-[0.4em]">
             Virtual Persona OS / Unified Interface
@@ -136,6 +149,8 @@ export function VersHome() {
                 <Suspense fallback={<div className="flex items-center justify-center h-full text-xs font-mono text-white/20">SYNCHRONIZING...</div>}>
                   {win.type === 'status' && <StatusCore isWindowMode={true} />}
                   {win.type === 'memory' && <MemoryCore isWindowMode={true} onClose={() => closeWindow(win.id)} />}
+                  {win.type === 'agent' && <AgentCreator onAgentCreated={fetchAgents} />}
+                  {win.type === 'plugin' && <VersPluginManager />}
                   {win.type === 'sandbox' && <AgentTerminal />}
                 </Suspense>
               </GlassWindow>

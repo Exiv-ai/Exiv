@@ -3,31 +3,59 @@ import { Cpu, ChevronRight, Puzzle, Activity, MessageSquare } from 'lucide-react
 import { AgentMetadata, PluginManifest } from '../types';
 import { AgentPluginWorkspace } from './AgentPluginWorkspace';
 
-export function AgentTerminal() {
-  const [agents, setAgents] = useState<AgentMetadata[]>([]);
-  const [plugins, setPlugins] = useState<PluginManifest[]>([]);
+import { api } from '../services/api';
+
+export interface AgentTerminalProps {
+  agents?: AgentMetadata[];
+  plugins?: PluginManifest[];
+  selectedAgent?: AgentMetadata | null;
+  onSelectAgent?: (agent: AgentMetadata | null) => void;
+}
+
+export function AgentTerminal({ 
+  agents: propAgents, 
+  plugins: propPlugins,
+  selectedAgent: propSelectedAgent, 
+  onSelectAgent: propOnSelectAgent 
+}: AgentTerminalProps = {}) {
+  const [internalAgents, setInternalAgents] = useState<AgentMetadata[]>([]);
+  const [internalPlugins, setInternalPlugins] = useState<PluginManifest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedAgent, setSelectedAgent] = useState<AgentMetadata | null>(null);
+  const [internalSelectedAgent, setInternalSelectedAgent] = useState<AgentMetadata | null>(null);
   const [configuringAgent, setConfiguringAgent] = useState<AgentMetadata | null>(null);
 
+  const agents = propAgents || internalAgents;
+  const plugins = propPlugins || internalPlugins;
+  const selectedAgent = propSelectedAgent !== undefined ? propSelectedAgent : internalSelectedAgent;
+
   useEffect(() => {
-    fetchInitialData();
-  }, []);
+    if (!propAgents) {
+      fetchInitialData();
+    } else {
+      setIsLoading(false);
+    }
+  }, [propAgents]);
 
   const fetchInitialData = async () => {
     try {
-      const [agentsRes, pluginsRes] = await Promise.all([
-        fetch('/agents'),
-        fetch('/plugins')
+      const [agentsData, pluginsData] = await Promise.all([
+        api.getAgents(),
+        api.getPlugins()
       ]);
-      const agentsData = await agentsRes.json();
-      const pluginsData = await pluginsRes.json();
-      setAgents(agentsData);
-      setPlugins(pluginsData);
+      setInternalAgents(agentsData);
+      setInternalPlugins(pluginsData);
     } catch (err) {
       console.error('Failed to fetch data:', err);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleSelectAgent = (agent: AgentMetadata | null) => {
+    if (propOnSelectAgent) {
+      propOnSelectAgent(agent);
+    } else {
+      setInternalSelectedAgent(agent);
     }
   };
 
@@ -49,7 +77,7 @@ export function AgentTerminal() {
         <h2 className="text-xl font-black text-slate-800 tracking-widest uppercase">{selectedAgent.name} CONSOLE</h2>
         <p className="text-xs text-slate-400 font-mono tracking-widest">ESTABLISHING NEURAL LINK...</p>
         <button 
-          onClick={() => setSelectedAgent(null)}
+          onClick={() => handleSelectAgent(null)}
           className="mt-8 px-6 py-2 rounded-full border border-slate-200 text-[10px] font-bold text-slate-400 hover:text-[#2e4de6] transition-all"
         >
           DISCONNECT / BACK TO LIST
@@ -79,11 +107,11 @@ export function AgentTerminal() {
           agents.map((agent) => (
             <div 
               key={agent.id}
-              className="group flex h-24 bg-white/60 hover:bg-white border border-slate-100 rounded-2xl overflow-hidden transition-all duration-500 shadow-sm hover:-translate-y-0.5"
+              className="group flex h-24 bg-white/60 hover:bg-white border border-slate-100 rounded-2xl overflow-hidden transition-all duration-500 shadow-sm"
             >
               {/* Left / Main Info */}
               <div 
-                onClick={() => setSelectedAgent(agent)}
+                onClick={() => handleSelectAgent(agent)}
                 className="flex-1 flex items-center px-8 cursor-pointer relative overflow-hidden"
               >
                 <div className="absolute left-0 top-0 w-1 h-full bg-[#2e4de6] opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -105,14 +133,14 @@ export function AgentTerminal() {
               {/* Right Small Square (Plugin Connection Port) */}
               <button 
                 title="Manage Container Plugins"
-                className="w-24 h-full border-l border-slate-100 bg-slate-50/50 hover:bg-[#2e4de6]/5 flex flex-col items-center justify-center gap-2 transition-all hover:text-[#2e4de6]"
+                className="w-24 h-full border-l border-slate-100 bg-slate-50/50 hover:bg-[#2e4de6]/10 flex flex-col items-center justify-center gap-2 transition-all hover:text-[#2e4de6]"
                 onClick={(e) => {
                    e.stopPropagation();
                    setConfiguringAgent(agent);
                 }}
               >
-                <Puzzle size={20} className="text-slate-300 group-hover:text-[#2e4de6]/40 transition-colors" />
-                <span className="text-[8px] font-black tracking-tighter uppercase text-slate-300 group-hover:text-[#2e4de6]">Plugins</span>
+                <Puzzle size={20} className="text-slate-400 group-hover:text-[#2e4de6]/80 transition-colors" />
+                <span className="text-[8px] font-black tracking-tighter uppercase text-slate-400 group-hover:text-[#2e4de6]">Plugins</span>
               </button>
             </div>
           ))

@@ -2,7 +2,68 @@ import React, { useState, useEffect } from 'react';
 import { Puzzle, Shield, CheckCircle2, AlertTriangle, Save, Filter, Brain, Database, Zap, Globe, Settings, MousePointer2, ExternalLink, Terminal } from 'lucide-react';
 import { PluginManifest } from '../types';
 
+import { api } from '../services/api';
+
 const MANDATORY_TAGS = ['#CORE', '#MIND', '#MEMORY', '#LLM', '#TOOL', '#ADAPTER', '#HAL'];
+
+function ConfigModal({ plugin, onClose }: { plugin: PluginManifest, onClose: () => void }) {
+  const [config, setConfig] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.getPluginConfig(plugin.id)
+      .then(setConfig)
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [plugin.id]);
+
+  const save = async (key: string, value: string) => {
+    const newConfig = { ...config, [key]: value };
+    await api.updatePluginConfig(plugin.id, { [key]: value });
+    setConfig(newConfig);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-lg p-6 shadow-2xl animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+        <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-slate-800">
+          <Settings size={18} className="text-[#2e4de6]" />
+          Configure {plugin.name}
+        </h3>
+        
+        {loading ? (
+          <div className="p-8 text-center text-slate-400 font-mono text-xs">Loading config...</div>
+        ) : (
+          <div className="space-y-4">
+            {plugin.required_config_keys.length > 0 ? plugin.required_config_keys.map(key => (
+              <div key={key}>
+                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">{key}</label>
+                <input 
+                  type={key.includes('key') || key.includes('password') ? 'password' : 'text'}
+                  value={config[key] || ''}
+                  onChange={e => setConfig(prev => ({ ...prev, [key]: e.target.value }))}
+                  onBlur={e => save(key, e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm font-mono focus:outline-none focus:border-[#2e4de6] focus:ring-1 focus:ring-[#2e4de6]"
+                  placeholder={`Enter ${key}...`}
+                />
+              </div>
+            )) : (
+              <div className="p-4 bg-slate-50 text-slate-400 text-xs rounded-lg text-center font-mono border border-slate-100 border-dashed">
+                No configuration required for this plugin.
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="mt-6 flex justify-end">
+          <button onClick={onClose} className="px-6 py-2 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors tracking-wide">
+            CLOSE
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function VersPluginManager() {
   const [plugins, setPlugins] = useState<PluginManifest[]>([]);
@@ -10,6 +71,7 @@ export function VersPluginManager() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [configTarget, setConfigTarget] = useState<PluginManifest | null>(null);
 
   useEffect(() => {
     fetchPlugins();
@@ -18,10 +80,9 @@ export function VersPluginManager() {
   const fetchPlugins = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/plugins');
-      const data = await res.json();
+      const data = await api.getPlugins();
       setPlugins(data);
-      setEditingPlugins(JSON.parse(JSON.stringify(data))); // Deep copy for editing
+      setEditingPlugins(JSON.parse(JSON.stringify(data)));
     } catch (err) {
       console.error('Failed to fetch plugins:', err);
     } finally {
@@ -37,7 +98,6 @@ export function VersPluginManager() {
 
   const hasChanges = JSON.stringify(plugins) !== JSON.stringify(editingPlugins);
 
-  // 指定されたプラグインに変更がある（保存前）かどうか
   const isPluginPending = (id: string) => {
     const original = plugins.find(p => p.id === id);
     const editing = editingPlugins.find(p => p.id === id);
@@ -46,12 +106,20 @@ export function VersPluginManager() {
 
   const applyChanges = async () => {
     setIsSaving(true);
-    // 実際には /plugins/apply 等のPOSTエンドポイントへ送信
-    console.log("Applying changes:", editingPlugins);
-    setTimeout(() => {
+    try {
+      // 全ての変更を順番に適用（現在は個別のapplyが必要な設計だが、api.togglePluginをループさせる）
+      for (const p of editingPlugins) {
+        const original = plugins.find(orig => orig.id === p.id);
+        if (original && original.is_active !== p.is_active) {
+          await api.togglePlugin(p.id, p.is_active);
+        }
+      }
       setPlugins(JSON.parse(JSON.stringify(editingPlugins)));
+    } catch (err) {
+      console.error('Failed to apply plugin changes:', err);
+    } finally {
       setIsSaving(false);
-    }, 800);
+    }
   };
 
   const allTags = Array.from(new Set(plugins.flatMap(p => p.tags)));
@@ -88,7 +156,7 @@ export function VersPluginManager() {
         <div>
           <h2 className="text-xl font-black tracking-tight text-slate-800 uppercase">System Plugins</h2>
           <p className="text-[10px] text-slate-400 font-mono tracking-widest uppercase mt-1">
-            VERS-SYSTEM Kernel v0.1.0 / Configuration Panel
+            VERS-SYSTEM Kernel v0.3.0 / Configuration Panel
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -199,7 +267,7 @@ export function VersPluginManager() {
                   {plugin.action_icon && (
                     <button
                       disabled={!plugin.is_active || isPluginPending(plugin.id)}
-                      onClick={() => console.log("Executing action:", plugin.action_target)}
+                      onClick={() => setConfigTarget(plugin)}
                       className={`absolute bottom-4 right-4 p-2 rounded-lg transition-all ${
                         plugin.is_active && !isPluginPending(plugin.id)
                           ? 'bg-[#2e4de6]/10 text-[#2e4de6] hover:bg-[#2e4de6] hover:text-white shadow-sm'
@@ -235,6 +303,11 @@ export function VersPluginManager() {
             APPLY CONFIGURATION
           </button>
         </div>
+      )}
+
+      {/* Config Modal */}
+      {configTarget && (
+        <ConfigModal plugin={configTarget} onClose={() => setConfigTarget(null)} />
       )}
     </div>
   );

@@ -4,6 +4,7 @@ import { Brain, Sparkles, History, Activity, User, ArrowLeft } from 'lucide-reac
 import { Link, useNavigate } from 'react-router-dom';
 import { LockScreen } from './LockScreen';
 import { SystemHistory } from './SystemHistory';
+import { useEventStream } from '../hooks/useEventStream';
 
 interface Memory {
   user_id: string;
@@ -31,30 +32,36 @@ export const MemoryCore = memo(function MemoryCore({ isWindowMode = false, onClo
   const [isLocked, setIsLocked] = useState(true);
   const navigate = useNavigate();
 
+  const fetchData = async () => {
+    try {
+      const headers: Record<string, string> = {};
+      const [memRes, epiRes, metRes] = await Promise.all([
+        fetch(`/api/memories`, { headers }),
+        fetch(`/api/episodes`, { headers }),
+        fetch(`/api/metrics`, { headers })
+      ]);
+
+      if (memRes.ok) setMemories(await memRes.json());
+      if (epiRes.ok) setEpisodes(await epiRes.json());
+      if (metRes.ok) setMetrics(await metRes.json());
+    } catch (error) {
+      console.error('Failed to fetch data', error);
+    }
+  };
+
   useEffect(() => {
-    if (isLocked) return;
-
-    const fetchData = async () => {
-      try {
-        const headers: Record<string, string> = {};
-        const [memRes, epiRes, metRes] = await Promise.all([
-          fetch(`/api/memories`, { headers }),
-          fetch(`/api/episodes`, { headers }),
-          fetch(`/api/metrics`, { headers })
-        ]);
-
-        if (memRes.ok) setMemories(await memRes.json());
-        if (epiRes.ok) setEpisodes(await epiRes.json());
-        if (metRes.ok) setMetrics(await metRes.json());
-      } catch (error) {
-        console.error('Failed to fetch data', error);
-      }
-    };
-
-    fetchData();
-    const interval = setInterval(fetchData, 10000);
-    return () => clearInterval(interval);
+    if (!isLocked) {
+      fetchData();
+    }
   }, [isLocked]);
+
+  useEventStream('/events', (data) => {
+    if (data.type === 'MessageReceived' || data.type === 'VisionUpdated' || data.type === 'SystemNotification') {
+       // On relevant events, refresh the data
+       // Ideally we would append the new message/memory directly, but for now we re-fetch to ensure consistency
+       fetchData();
+    }
+  });
 
   if (isLocked) {
     return (
