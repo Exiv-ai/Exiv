@@ -2,7 +2,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use serde::Deserialize;
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
@@ -21,6 +20,7 @@ mod db;
 mod events;
 mod handlers;
 mod managers;
+mod capabilities;
 
 use config::AppConfig;
 use events::EventProcessor;
@@ -33,18 +33,6 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub agent_manager: AgentManager,
     pub plugin_manager: Arc<PluginManager>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PluginToggleRequest {
-    pub id: String,
-    pub is_active: bool,
-}
-
-#[derive(sqlx::FromRow, Debug)]
-pub struct PluginSetting {
-    pub plugin_id: String,
-    pub is_active: bool,
 }
 
 #[tokio::main]
@@ -106,7 +94,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // 6. Web Server
-    let mut api_routes = Router::new()
+    let api_routes = Router::new()
         .route("/events", get(handlers::sse_handler))
         .route("/chat", post(handlers::chat_handler))
         .route("/plugins", get(handlers::get_plugins))
@@ -120,23 +108,19 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::get_agents).post(handlers::create_agent),
         );
 
-    // 🔌 プラグイン固有のルートを登録 (AppState を保持したままマージ)
+    // 🔌 プラグイン固有のルートを登録 (Capability-Driven)
+    let mut dynamic_routes = Router::new();
     for (id, plugin) in registry.plugins.iter() {
-        // 現在は DeepSeekPlugin のみ Web 拡張を持っているため個別にチェック。
-        // 将来的に WebPlugin トレイトを介在させる場合も、ここでのダウンキャストが基盤となります。
-        if let Some(ds) = plugin.as_any().downcast_ref::<DeepSeekPlugin>() {
-            api_routes = ds.register_routes(api_routes);
-            info!(
-                "🔌 Registered dynamic routes for web-enabled plugin: {}",
-                id
-            );
+        if let Some(web) = plugin.as_web() {
+            dynamic_routes = web.register_routes(dynamic_routes);
+            info!("🔌 Registered dynamic routes for web-enabled plugin: {}", id);
         }
-
-        // 他のプラグイン（Cerebras, Cursor 等）が Web 拡張を持つ場合も同様にここで追加可能です。
     }
 
+    // AppState を Any にキャストしてプラグイン用ルートに提供し、コアAPIとマージ
+    let dynamic_routes_with_state = dynamic_routes.with_state(app_state.clone() as Arc<dyn std::any::Any + Send + Sync>);
     let app = Router::new()
-        .nest("/api", api_routes.with_state(app_state))
+        .nest("/api", api_routes.with_state(app_state.clone()).merge(dynamic_routes_with_state))
         .nest_service("/", ServeDir::new(config.dashboard_path))
         .layer(
             CorsLayer::new()

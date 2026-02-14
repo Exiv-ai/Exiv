@@ -56,6 +56,37 @@ pub enum Permission {
     MemoryWrite,
 }
 
+impl std::fmt::Display for Permission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+/// Kernelによって認可され、実行時に提供されるプラグインの権限・環境情報
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginRuntimeContext {
+    pub effective_permissions: Vec<Permission>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpRequest {
+    pub method: String,
+    pub url: String,
+    pub headers: HashMap<String, String>,
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub body: String,
+}
+
+#[async_trait]
+pub trait NetworkCapability: Send + Sync {
+    async fn send_http_request(&self, request: HttpRequest) -> anyhow::Result<HttpResponse>;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServiceType {
     Communication,
@@ -143,6 +174,15 @@ pub struct DetectedElement {
 pub trait Plugin: Any + Send + Sync {
     fn manifest(&self) -> PluginManifest;
 
+    /// プラグイン自体の初期化（権限の割り当てなど）
+    async fn on_plugin_init(
+        &self,
+        _context: PluginRuntimeContext,
+        _network: Option<Arc<dyn NetworkCapability>>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// システムイベントの購読（デフォルトは何もしない）
     /// 戻り値としてイベントを返すと、Kernelによって再配信される
     async fn on_event(&self, _event: &VersEvent) -> anyhow::Result<Option<VersEvent>> {
@@ -169,6 +209,13 @@ pub trait Plugin: Any + Send + Sync {
     fn as_memory(&self) -> Option<&dyn MemoryProvider> {
         None
     }
+    fn as_web(&self) -> Option<&dyn WebPlugin> {
+        None
+    }
+}
+
+pub trait WebPlugin: Plugin {
+    fn register_routes(&self, router: axum::Router<Arc<dyn Any + Send + Sync>>) -> axum::Router<Arc<dyn Any + Send + Sync>>;
 }
 
 #[async_trait]

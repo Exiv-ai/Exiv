@@ -5,8 +5,16 @@ use tracing::{info, error};
 
 use vers_shared::{
     AgentMetadata, MemoryProvider, Plugin, PluginConfig, PluginFactory, PluginManifest,
-    ReasoningEngine, VersEvent, VersId, VersMessage,
+    ReasoningEngine, VersEvent, VersId, VersMessage, Permission, PluginRuntimeContext, NetworkCapability
 };
+use crate::capabilities::SafeHttpClient;
+
+#[derive(sqlx::FromRow, Debug)]
+pub struct PluginSetting {
+    pub plugin_id: String,
+    pub is_active: bool,
+    pub allowed_permissions: sqlx::types::Json<Vec<Permission>>,
+}
 
 pub struct PluginRegistry {
     pub plugins: HashMap<String, Arc<dyn Plugin>>,
@@ -37,19 +45,22 @@ impl PluginRegistry {
         event: &VersEvent,
         event_tx: &tokio::sync::mpsc::Sender<VersEvent>,
     ) {
-        // 全プラグインの on_event を並列実行
-        let mut futures = Vec::new();
-        for plugin in self.plugins.values() {
-            futures.push(plugin.on_event(event));
+        // 全プラグインの on_event を並列実行 (タスクとして分離し、パニックを隔離)
+        let mut handles = Vec::new();
+        for (id, plugin) in &self.plugins {
+            let plugin = plugin.clone();
+            let event = event.clone();
+            let id = id.clone();
+            handles.push((id, tokio::spawn(async move {
+                plugin.on_event(&event).await
+            })));
         }
 
-        // 結果は待機するが、個別のエラーで全体を止めない
-        let results = futures::future::join_all(futures).await;
-        for res in results {
-            match res {
-                Ok(Some(new_event)) => {
+        // 結果を待機
+        for (id, handle) in handles {
+            match handle.await {
+                Ok(Ok(Some(new_event))) => {
                     // プラグインが新しいイベントを返した場合、バスに再投入する
-                    // デッドロック防止のため、送信処理は非同期化する
                     let tx = event_tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = tx.send(new_event).await {
@@ -57,9 +68,13 @@ impl PluginRegistry {
                         }
                     });
                 }
-                Ok(None) => {}
+                Ok(Ok(None)) => {}
+                Ok(Err(e)) => {
+                    error!("🔌 Plugin {} on_event error: {}", id, e);
+                }
                 Err(e) => {
-                    error!("🔌 Plugin event dispatch error: {}", e);
+                    // JoinError: タスクがパニックした場合など
+                    error!("🔥 Plugin {} PANICKED during event processing: {}", id, e);
                 }
             }
         }
@@ -69,6 +84,7 @@ impl PluginRegistry {
 pub struct PluginManager {
     pub pool: SqlitePool, // Made public for handlers if needed, or keep methods here
     factories: HashMap<String, Arc<dyn PluginFactory>>,
+    http_client: Arc<SafeHttpClient>,
 }
 
 impl PluginManager {
@@ -76,6 +92,7 @@ impl PluginManager {
         Self {
             pool,
             factories: HashMap::new(),
+            http_client: Arc::new(SafeHttpClient::new()),
         }
     }
 
@@ -92,19 +109,25 @@ impl PluginManager {
 
         if count.0 == 0 {
             info!("🌱 Seeding default plugin settings...");
-            let defaults = vec!["core.ks2_2", "mind.deepseek", "mind.cerebras", "hal.cursor"];
-            for id in defaults {
+            let defaults = vec![
+                ("core.ks2_2", "[]"),
+                ("mind.deepseek", "[\"NetworkAccess\"]"),
+                ("mind.cerebras", "[\"NetworkAccess\"]"),
+                ("hal.cursor", "[]"),
+            ];
+            for (id, perms) in defaults {
                 sqlx::query(
-                    "INSERT OR IGNORE INTO plugin_settings (plugin_id, is_active) VALUES (?, 1)",
+                    "INSERT OR IGNORE INTO plugin_settings (plugin_id, is_active, allowed_permissions) VALUES (?, 1, ?)",
                 )
                 .bind(id)
+                .bind(perms)
                 .execute(&self.pool)
                 .await?;
             }
         }
 
-        let settings: Vec<(String, bool)> =
-            sqlx::query_as("SELECT plugin_id, is_active FROM plugin_settings WHERE is_active = 1")
+        let settings: Vec<PluginSetting> =
+            sqlx::query_as("SELECT plugin_id, is_active, allowed_permissions FROM plugin_settings WHERE is_active = 1")
                 .fetch_all(&self.pool)
                 .await?;
 
@@ -118,16 +141,35 @@ impl PluginManager {
             config_map.entry(pid).or_default().insert(k, v);
         }
 
-        for (plugin_id_str, _) in settings {
-            if let Some(factory) = self.factories.get(&plugin_id_str) {
+        for setting in settings {
+            let plugin_id_str = &setting.plugin_id;
+            if let Some(factory) = self.factories.get(plugin_id_str) {
                 let config = PluginConfig {
-                    id: VersId::from_name(&plugin_id_str),
-                    config_values: config_map.remove(&plugin_id_str).unwrap_or_default(),
+                    id: VersId::from_name(plugin_id_str),
+                    config_values: config_map.remove(plugin_id_str).unwrap_or_default(),
                 };
 
                 info!("🔌 Initializing plugin: {}", plugin_id_str);
                 match factory.create(config).await {
                     Ok(plugin) => {
+                        // 🔐 権限の注入 (Principles #5)
+                        let permissions = setting.allowed_permissions.0;
+                        let context = PluginRuntimeContext {
+                            effective_permissions: permissions.clone(),
+                        };
+                        
+                        // 💉 Capability Injection
+                        let network_capability = if permissions.contains(&Permission::NetworkAccess) {
+                            Some(self.http_client.clone() as Arc<dyn NetworkCapability>)
+                        } else {
+                            None
+                        };
+
+                        if let Err(e) = plugin.on_plugin_init(context, network_capability).await {
+                            error!("❌ Plugin {} rejected initialization: {}", plugin_id_str, e);
+                            continue;
+                        }
+                        
                         registry.plugins.insert(plugin_id_str.clone(), plugin);
                     }
                     Err(e) => {

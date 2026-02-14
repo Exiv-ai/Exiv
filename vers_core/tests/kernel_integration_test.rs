@@ -7,12 +7,13 @@ use sqlx::SqlitePool;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tower::ServiceExt;
-use vers_shared::{Plugin, VersEvent};
+use vers_shared::{Plugin, VersEvent, WebPlugin};
+use std::any::Any;
 
 // 💡 統合テスト用に最小限のセットアップを模倣
 #[tokio::test]
 async fn test_dynamic_routing_registration() {
-    // 1. Setup minimal state
+    // 1. Setup minimal state (Omitted setup code for brevity, but keeping logic consistent)
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     sqlx::query("CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT, description TEXT, status TEXT, default_engine_id TEXT, metadata TEXT)").execute(&pool).await.unwrap();
     sqlx::query("CREATE TABLE plugin_settings (plugin_id TEXT PRIMARY KEY, is_active BOOLEAN)")
@@ -31,14 +32,17 @@ async fn test_dynamic_routing_registration() {
         None,
     ));
 
-    // 3. Manually build the router as main.rs does
-    let mut api_routes =
-        axum::Router::new().route("/health", axum::routing::get(|| async { "ok" }));
-
-    // 🔌 Plugin route injection (Manual mock of main.rs loop)
-    if let Some(ds) = ds_plugin.as_any().downcast_ref::<DeepSeekPlugin>() {
-        api_routes = ds.register_routes(api_routes);
+    // 3. Manually build the router as main.rs does (using the new capability-driven registration)
+    let mut dynamic_routes = axum::Router::new();
+    if let Some(web) = ds_plugin.as_web() {
+        dynamic_routes = web.register_routes(dynamic_routes);
     }
+
+    // Mock state matching the Router's expected state type in register_routes
+    let mock_state = Arc::new("mock_state".to_string()) as Arc<dyn Any + Send + Sync>;
+    let api_routes = axum::Router::new()
+        .route("/health", axum::routing::get(|| async { "ok" }))
+        .merge(dynamic_routes.with_state(mock_state));
 
     let app = axum::Router::new().nest("/api", api_routes);
 

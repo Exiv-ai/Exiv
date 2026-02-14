@@ -3,13 +3,16 @@ use std::any::Any;
 use std::sync::Arc;
 use vers_shared::{
     AgentMetadata, CapabilityType, Plugin, PluginConfig, PluginFactory, PluginManifest,
-    ReasoningEngine, ServiceType, VersId as PluginId, VersMessage,
+    ReasoningEngine, ServiceType, VersId as PluginId, VersMessage, Permission, PluginRuntimeContext,
+    NetworkCapability, HttpRequest
 };
 
 pub struct DeepSeekPlugin {
     id: PluginId,
     api_key: String,
     model_id: String,
+    allowed_permissions: std::sync::RwLock<Vec<Permission>>,
+    http_client: std::sync::RwLock<Option<Arc<dyn NetworkCapability>>>,
 }
 
 impl DeepSeekPlugin {
@@ -18,17 +21,21 @@ impl DeepSeekPlugin {
             id,
             api_key: api_key.unwrap_or_default(),
             model_id: model_id.unwrap_or_else(|| "deepseek-chat".to_string()),
+            allowed_permissions: std::sync::RwLock::new(vec![]),
+            http_client: std::sync::RwLock::new(None),
         }
     }
 
     pub fn factory() -> Arc<dyn PluginFactory> {
         Arc::new(DeepSeekFactory)
     }
+}
 
-    pub fn register_routes<S>(&self, router: axum::Router<S>) -> axum::Router<S>
-    where
-        S: Clone + Send + Sync + 'static,
-    {
+impl vers_shared::WebPlugin for DeepSeekPlugin {
+    fn register_routes(
+        &self,
+        router: axum::Router<Arc<dyn Any + Send + Sync>>,
+    ) -> axum::Router<Arc<dyn Any + Send + Sync>> {
         router.route(
             "/plugin/deepseek/status",
             axum::routing::get(|| async {
@@ -57,14 +64,35 @@ impl Plugin for DeepSeekPlugin {
             required_config_keys: vec!["api_key".to_string()],
             action_icon: Some("Brain".to_string()),
             action_target: None,
-            required_permissions: vec![],
+            required_permissions: vec![Permission::NetworkAccess],
             provided_capabilities: vec![CapabilityType::Reasoning],
             provided_tools: vec![],
         }
     }
 
+    async fn on_plugin_init(
+        &self,
+        context: PluginRuntimeContext,
+        network: Option<Arc<dyn NetworkCapability>>,
+    ) -> anyhow::Result<()> {
+        {
+            let mut perms = self.allowed_permissions.write().map_err(|_| anyhow::anyhow!("Lock error"))?;
+            *perms = context.effective_permissions;
+            tracing::info!("🔐 DeepSeek initialized with permissions: {:?}", *perms);
+        }
+        {
+            let mut client = self.http_client.write().map_err(|_| anyhow::anyhow!("Lock error"))?;
+            *client = network;
+        }
+        Ok(())
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn as_web(&self) -> Option<&dyn vers_shared::WebPlugin> {
+        Some(self)
     }
 
     async fn on_event(
@@ -122,7 +150,13 @@ impl ReasoningEngine for DeepSeekPlugin {
             ));
         }
 
-        let client = reqwest::Client::new();
+        // 🛡️ Capability Check (Physical Isolation)
+        let client = {
+            let client_guard = self.http_client.read().map_err(|_| anyhow::anyhow!("Lock error"))?;
+            client_guard.clone().ok_or_else(|| anyhow::anyhow!(
+                "Security Violation: NetworkCapability not injected. Check permissions."
+            ))?
+        };
 
         // Build messages
         let mut messages = Vec::new();
@@ -159,20 +193,25 @@ impl ReasoningEngine for DeepSeekPlugin {
             "stream": false
         });
 
-        let resp = client
-            .post("https://api.deepseek.com/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
-            .await?;
+        // Use injected capability
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("Authorization".to_string(), format!("Bearer {}", self.api_key));
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
 
-        if !resp.status().is_success() {
-            let error_text = resp.text().await?;
-            return Err(anyhow::anyhow!("DeepSeek API Error: {}", error_text));
+        let req = HttpRequest {
+            method: "POST".to_string(),
+            url: "https://api.deepseek.com/chat/completions".to_string(),
+            headers,
+            body: Some(payload.to_string()),
+        };
+
+        let resp = client.send_http_request(req).await?;
+
+        if resp.status < 200 || resp.status >= 300 {
+            return Err(anyhow::anyhow!("DeepSeek API Error: {} - {}", resp.status, resp.body));
         }
 
-        let json: serde_json::Value = resp.json().await?;
+        let json: serde_json::Value = serde_json::from_str(&resp.body)?;
 
         let content = json["choices"][0]["message"]["content"]
             .as_str()

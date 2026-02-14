@@ -1,4 +1,3 @@
-use crate::{AppState, PluginSetting, PluginToggleRequest};
 use axum::{
     extract::{Path, State},
     response::sse::{Event, Sse},
@@ -9,6 +8,14 @@ use serde::Deserialize;
 use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 use tracing::{error, info};
 use vers_shared::{AgentMetadata, PluginManifest, VersEvent, VersMessage};
+
+use crate::AppState;
+
+#[derive(Debug, Deserialize)]
+pub struct PluginToggleRequest {
+    pub id: String,
+    pub is_active: bool,
+}
 
 #[derive(Deserialize)]
 pub struct CreateAgentRequest {
@@ -68,7 +75,7 @@ pub async fn get_plugins(State(state): State<Arc<AppState>>) -> Json<Vec<PluginM
     let mut manifests = Vec::new();
 
     // DBから設定をロード
-    let settings_result = sqlx::query_as::<_, PluginSetting>("SELECT * FROM plugin_settings")
+    let settings_result = sqlx::query_as::<_, crate::managers::PluginSetting>("SELECT * FROM plugin_settings")
         .fetch_all(&state.pool)
         .await;
 
@@ -133,22 +140,37 @@ pub async fn apply_plugin_settings(
         "📥 Received plugin settings apply request: {} items",
         payload.len()
     );
-    let mut success = true;
+
+    let mut tx = match state.pool.begin().await {
+        Ok(t) => t,
+        Err(e) => {
+            error!("❌ Failed to start transaction: {}", e);
+            return Json(false);
+        }
+    };
+
     for item in payload {
         let res = sqlx::query(
-            "INSERT OR REPLACE INTO plugin_settings (plugin_id, is_active) VALUES (?, ?)",
+            "UPDATE plugin_settings SET is_active = ? WHERE plugin_id = ?",
         )
-        .bind(&item.id)
         .bind(item.is_active)
-        .execute(&state.pool)
+        .bind(&item.id)
+        .execute(&mut *tx)
         .await;
 
         if let Err(e) = res {
             error!("❌ Failed to save plugin setting for {}: {}", item.id, e);
-            success = false;
+            return Json(false);
         }
     }
-    Json(success)
+
+    match tx.commit().await {
+        Ok(_) => Json(true),
+        Err(e) => {
+            error!("❌ Failed to commit transaction: {}", e);
+            Json(false)
+        }
+    }
 }
 
 /// メッセージ送信ハンドラ
