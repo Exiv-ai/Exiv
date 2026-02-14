@@ -4,6 +4,7 @@ import { InteractiveGrid } from '../components/InteractiveGrid';
 import { GlassWindow } from '../components/GlassWindow';
 import { AgentNavigator } from '../components/AgentNavigator';
 import { AgentTerminal } from '../components/AgentTerminal';
+import { SecurityGuard } from '../components/SecurityGuard';
 import { AgentMetadata } from '../types';
 
 const StatusCore = lazy(() => import('../components/StatusCore').then(m => ({ default: (m as any).StatusCore })));
@@ -75,6 +76,7 @@ export function VersHome() {
   return (
     <div className="flex h-screen w-screen bg-[#050505] text-white overflow-hidden font-sans select-none relative">
       <InteractiveGrid />
+      <SecurityGuard />
       
       {/* 2.x Agent Navigator - Integrated into 1.6 style */}
       <div className="relative z-20 h-full">

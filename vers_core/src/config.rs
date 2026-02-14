@@ -9,12 +9,16 @@ pub struct AppConfig {
     pub dashboard_path: PathBuf,
     pub port: u16,
     pub cors_origins: Vec<HeaderValue>,
+    pub default_agent_id: String,
 }
 
 impl AppConfig {
     pub fn load() -> anyhow::Result<Self> {
         let database_url =
             env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:./vers_memories.db".to_string());
+
+        let default_agent_id =
+            env::var("DEFAULT_AGENT_ID").unwrap_or_else(|_| "agent.karin".to_string());
 
         let dashboard_path_str =
             env::var("VERS_DASHBOARD_PATH").unwrap_or_else(|_| "./vers_dashboard/dist".to_string());
@@ -38,6 +42,7 @@ impl AppConfig {
             dashboard_path,
             port,
             cors_origins,
+            default_agent_id,
         })
     }
 }

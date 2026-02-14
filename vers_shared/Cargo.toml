@@ -13,3 +13,5 @@ tracing.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 axum.workspace = true
+vers_macros = { path = "../vers_macros" }
+inventory = "0.3.21"

@@ -1,13 +1,12 @@
 export type VersId = string;
 
 export interface VersMessage {
-  id: VersId;
-  source: {
-    type: 'User' | 'Agent' | 'System';
-    id?: string;
-    name?: string;
-  };
-  target_agent?: VersId;
+  id: string;
+  source: 
+    | { type: 'User'; id: string; name: string }
+    | { type: 'Agent'; id: string }
+    | { type: 'System' };
+  target_agent?: string;
   content: string;
   timestamp: string;
   metadata: Record<string, string>;
@@ -17,11 +16,12 @@ export interface AgentMetadata {
   id: VersId;
   name: string;
   description: string;
-  capabilities: Capability[];
+  required_capabilities: CapabilityType[];
   status: 'online' | 'offline' | 'busy';
+  metadata: Record<string, string>;
 }
 
-export type Capability = 
+export type Permission = 
   | 'VisionRead' 
   | 'InputControl' 
   | 'FileRead' 
@@ -30,6 +30,14 @@ export type Capability =
   | 'ProcessExecution' 
   | 'MemoryRead' 
   | 'MemoryWrite';
+
+export type CapabilityType =
+  | 'Reasoning'
+  | 'Memory'
+  | 'Communication'
+  | 'Tool'
+  | 'Vision'
+  | 'HAL';
 
 export interface PluginManifest {
   id: VersId;
@@ -43,7 +51,10 @@ export interface PluginManifest {
   required_config_keys: string[];
   action_icon?: string;
   action_target?: string;
-  required_capabilities: Capability[];
+  magic_seal: number;
+  sdk_version: string;
+  required_permissions: Permission[];
+  provided_capabilities: CapabilityType[];
   provided_tools: string[];
 }
 

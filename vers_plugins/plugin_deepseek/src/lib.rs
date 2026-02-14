@@ -1,33 +1,120 @@
 use async_trait::async_trait;
 use std::any::Any;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use vers_shared::{
-    AgentMetadata, CapabilityType, Plugin, PluginConfig, PluginFactory, PluginManifest,
-    ReasoningEngine, ServiceType, VersId as PluginId, VersMessage, Permission, PluginRuntimeContext,
-    NetworkCapability, HttpRequest
+    AgentMetadata, Plugin, PluginConfig,
+    ReasoningEngine, VersMessage, Permission, PluginRuntimeContext,
+    NetworkCapability, HttpRequest, vers_plugin
 };
 
+#[vers_plugin(
+    name = "mind.deepseek",
+    kind = "Reasoning",
+    description = "Advanced reasoning using DeepSeek API.",
+    version = "0.1.0",
+    icon = "assets/icon.svg",
+    action_icon = "Settings",
+    config_keys = ["api_key", "model_id"],
+    permissions = ["NetworkAccess"],
+    capabilities = ["Reasoning", "Web"]
+)]
 pub struct DeepSeekPlugin {
-    id: PluginId,
-    api_key: String,
-    model_id: String,
-    allowed_permissions: std::sync::RwLock<Vec<Permission>>,
-    http_client: std::sync::RwLock<Option<Arc<dyn NetworkCapability>>>,
+    id: String,
+    api_key: Arc<RwLock<String>>,
+    model_id: Arc<RwLock<String>>,
+    allowed_permissions: Arc<RwLock<Vec<Permission>>>,
+    http_client: Arc<RwLock<Option<Arc<dyn NetworkCapability>>>>,
 }
 
 impl DeepSeekPlugin {
-    pub fn new(id: PluginId, api_key: Option<String>, model_id: Option<String>) -> Self {
-        Self {
-            id,
-            api_key: api_key.unwrap_or_default(),
-            model_id: model_id.unwrap_or_else(|| "deepseek-chat".to_string()),
-            allowed_permissions: std::sync::RwLock::new(vec![]),
-            http_client: std::sync::RwLock::new(None),
-        }
+    pub async fn new_plugin(config: PluginConfig) -> anyhow::Result<Self> {
+        let api_key = config.config_values.get("api_key").cloned().unwrap_or_default();
+        let model_id = config.config_values.get("model_id").cloned().unwrap_or_else(|| "deepseek-chat".to_string());
+        
+        Ok(Self {
+            id: config.id,
+            api_key: Arc::new(RwLock::new(api_key)),
+            model_id: Arc::new(RwLock::new(model_id)),
+            allowed_permissions: Arc::new(RwLock::new(vec![])),
+            http_client: Arc::new(RwLock::new(None)),
+        })
+    }
+}
+
+#[async_trait]
+impl Plugin for DeepSeekPlugin {
+    fn manifest(&self) -> vers_shared::PluginManifest {
+        self.auto_manifest()
     }
 
-    pub fn factory() -> Arc<dyn PluginFactory> {
-        Arc::new(DeepSeekFactory)
+    async fn on_plugin_init(
+        &self,
+        context: PluginRuntimeContext,
+        network: Option<Arc<dyn NetworkCapability>>,
+    ) -> anyhow::Result<()> {
+        {
+            let mut perms = self.allowed_permissions.write().await;
+            *perms = context.effective_permissions;
+        }
+        {
+            let mut client = self.http_client.write().await;
+            *client = network;
+        }
+        Ok(())
+    }
+
+    async fn on_event(
+        &self,
+        event: &vers_shared::VersEvent,
+    ) -> anyhow::Result<Option<vers_shared::VersEvent>> {
+        match event {
+            vers_shared::VersEvent::ThoughtRequested {
+                agent,
+                engine_id,
+                message,
+                context,
+            } => {
+                if engine_id != "mind.deepseek" {
+                    return Ok(None);
+                }
+                let content = self.think(agent, message, context.clone()).await?;
+                return Ok(Some(vers_shared::VersEvent::ThoughtResponse {
+                    agent_id: agent.id.clone(),
+                    content,
+                    source_message_id: message.id.clone(),
+                }));
+            }
+            vers_shared::VersEvent::ConfigUpdated { plugin_id, config } => {
+                if plugin_id == "mind.deepseek" {
+                    if let Some(key) = config.get("api_key") {
+                        let mut api_key = self.api_key.write().await;
+                        *api_key = key.clone();
+                    }
+                    if let Some(model) = config.get("model_id") {
+                        let mut model_id = self.model_id.write().await;
+                        *model_id = model.clone();
+                    }
+                    println!("🔌 DeepSeek Plugin configuration hot-reloaded.");
+                }
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    async fn on_capability_injected(
+        &self,
+        capability: vers_shared::PluginCapability,
+    ) -> anyhow::Result<()> {
+        match capability {
+            vers_shared::PluginCapability::Network(net) => {
+                let mut client = self.http_client.write().await;
+                *client = Some(net);
+                println!("💉 DeepSeek Plugin: NetworkCapability injected live.");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -41,94 +128,10 @@ impl vers_shared::WebPlugin for DeepSeekPlugin {
             axum::routing::get(|| async {
                 axum::Json(serde_json::json!({
                     "status": "active",
-                    "engine": "deepseek-reasoner",
-                    "capabilities": ["text-generation", "context-recall"]
+                    "engine": "deepseek-reasoner"
                 }))
             }),
         )
-    }
-}
-
-#[async_trait]
-impl Plugin for DeepSeekPlugin {
-    fn manifest(&self) -> PluginManifest {
-        PluginManifest {
-            id: self.id,
-            name: "DeepSeek Reasoning".to_string(),
-            description: "Advanced reasoning using DeepSeek API.".to_string(),
-            version: "0.1.0".to_string(),
-            service_type: ServiceType::Reasoning,
-            tags: vec!["#LLM".to_string(), "#MIND".to_string()],
-            is_active: true,
-            is_configured: true,
-            required_config_keys: vec!["api_key".to_string()],
-            action_icon: Some("Brain".to_string()),
-            action_target: None,
-            required_permissions: vec![Permission::NetworkAccess],
-            provided_capabilities: vec![CapabilityType::Reasoning],
-            provided_tools: vec![],
-        }
-    }
-
-    async fn on_plugin_init(
-        &self,
-        context: PluginRuntimeContext,
-        network: Option<Arc<dyn NetworkCapability>>,
-    ) -> anyhow::Result<()> {
-        {
-            let mut perms = self.allowed_permissions.write().map_err(|_| anyhow::anyhow!("Lock error"))?;
-            *perms = context.effective_permissions;
-            tracing::info!("🔐 DeepSeek initialized with permissions: {:?}", *perms);
-        }
-        {
-            let mut client = self.http_client.write().map_err(|_| anyhow::anyhow!("Lock error"))?;
-            *client = network;
-        }
-        Ok(())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_web(&self) -> Option<&dyn vers_shared::WebPlugin> {
-        Some(self)
-    }
-
-    async fn on_event(
-        &self,
-        event: &vers_shared::VersEvent,
-    ) -> anyhow::Result<Option<vers_shared::VersEvent>> {
-        if let vers_shared::VersEvent::ThoughtRequested {
-            agent,
-            message,
-            context,
-        } = event
-        {
-            tracing::info!(
-                "🧠 DeepSeek received ThoughtRequested for agent: {}",
-                agent.name
-            );
-
-            // 思考の実行
-            match self.think(agent, message, context.clone()).await {
-                Ok(content) => {
-                    return Ok(Some(vers_shared::VersEvent::ThoughtResponse {
-                        agent_id: agent.id,
-                        content,
-                        source_message_id: message.id,
-                    }));
-                }
-                Err(e) => {
-                    tracing::error!("❌ DeepSeek thinking error: {}", e);
-                }
-            }
-        }
-        Ok(None)
-    }
-
-    fn as_reasoning(&self) -> Option<&dyn ReasoningEngine> {
-        Some(self)
     }
 }
 
@@ -144,99 +147,60 @@ impl ReasoningEngine for DeepSeekPlugin {
         message: &VersMessage,
         context: Vec<VersMessage>,
     ) -> anyhow::Result<String> {
-        if self.api_key.is_empty() {
-            return Err(anyhow::anyhow!(
-                "DeepSeek API Key is not configured in System Settings."
-            ));
-        }
-
-        // 🛡️ Capability Check (Physical Isolation)
-        let client = {
-            let client_guard = self.http_client.read().map_err(|_| anyhow::anyhow!("Lock error"))?;
-            client_guard.clone().ok_or_else(|| anyhow::anyhow!(
-                "Security Violation: NetworkCapability not injected. Check permissions."
-            ))?
+        let (api_key, model_id) = {
+            let key = self.api_key.read().await;
+            let model = self.model_id.read().await;
+            (key.clone(), model.clone())
         };
 
-        // Build messages
-        let mut messages = Vec::new();
+        if api_key.is_empty() {
+            return Err(anyhow::anyhow!("DeepSeek API Key not configured."));
+        }
 
-        // System Prompt
-        let system_content = format!("You are {}. {}.", agent.name, agent.description);
+        let client = {
+            let client_guard = self.http_client.read().await;
+            let client_opt: &Option<Arc<dyn NetworkCapability>> = &*client_guard;
+            client_opt.clone().ok_or_else(|| anyhow::anyhow!("NetworkCapability not injected."))?
+        };
+
+        let mut messages = Vec::new();
         messages.push(serde_json::json!({
             "role": "system",
-            "content": system_content
+            "content": format!("You are {}. {}.", agent.name, agent.description)
         }));
 
-        // History
         for msg in context {
             let role = match msg.source {
                 vers_shared::MessageSource::User { .. } => "user",
-                vers_shared::MessageSource::Agent(_) => "assistant",
+                vers_shared::MessageSource::Agent { .. } => "assistant",
                 vers_shared::MessageSource::System => "system",
             };
-            messages.push(serde_json::json!({
-                "role": role,
-                "content": msg.content
-            }));
+            messages.push(serde_json::json!({ "role": role, "content": msg.content }));
         }
 
-        // Current Message
-        messages.push(serde_json::json!({
-            "role": "user",
-            "content": message.content
-        }));
-
-        let payload = serde_json::json!({
-            "model": self.model_id,
-            "messages": messages,
-            "stream": false
-        });
-
-        // Use injected capability
-        let mut headers = std::collections::HashMap::new();
-        headers.insert("Authorization".to_string(), format!("Bearer {}", self.api_key));
-        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        messages.push(serde_json::json!({ "role": "user", "content": message.content }));
 
         let req = HttpRequest {
             method: "POST".to_string(),
             url: "https://api.deepseek.com/chat/completions".to_string(),
-            headers,
-            body: Some(payload.to_string()),
+            headers: [
+                ("Authorization".to_string(), format!("Bearer {}", api_key)),
+                ("Content-Type".to_string(), "application/json".to_string())
+            ].into_iter().collect(),
+            body: Some(serde_json::json!({
+                "model": model_id,
+                "messages": messages,
+                "stream": false
+            }).to_string()),
         };
 
         let resp = client.send_http_request(req).await?;
-
-        if resp.status < 200 || resp.status >= 300 {
-            return Err(anyhow::anyhow!("DeepSeek API Error: {} - {}", resp.status, resp.body));
-        }
-
         let json: serde_json::Value = serde_json::from_str(&resp.body)?;
-
         let content = json["choices"][0]["message"]["content"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Invalid response format from DeepSeek"))?
+            .ok_or_else(|| anyhow::anyhow!("Invalid API response"))?
             .to_string();
 
         Ok(content)
-    }
-}
-
-pub struct DeepSeekFactory;
-
-#[async_trait]
-impl PluginFactory for DeepSeekFactory {
-    fn name(&self) -> &str {
-        "mind.deepseek"
-    }
-    fn service_type(&self) -> ServiceType {
-        ServiceType::Reasoning
-    }
-
-    async fn create(&self, config: PluginConfig) -> anyhow::Result<Arc<dyn Plugin>> {
-        let api_key = config.config_values.get("api_key").cloned();
-        let model_id = config.config_values.get("model_id").cloned();
-        let plugin = DeepSeekPlugin::new(config.id, api_key, model_id);
-        Ok(Arc::new(plugin))
     }
 }

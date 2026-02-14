@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { Cpu, ChevronRight, Puzzle, Activity, MessageSquare } from 'lucide-react';
-import { AgentMetadata, PluginManifest } from '../types';
+import React, { useState, useEffect, useRef } from 'react';
+import { Cpu, ChevronRight, Puzzle, Activity, MessageSquare, Send, Zap, User as UserIcon } from 'lucide-react';
+import { AgentMetadata, PluginManifest, VersMessage } from '../types';
 import { AgentPluginWorkspace } from './AgentPluginWorkspace';
+import { useEventStream } from '../hooks/useEventStream';
 
 import { api } from '../services/api';
 
@@ -10,6 +11,149 @@ export interface AgentTerminalProps {
   plugins?: PluginManifest[];
   selectedAgent?: AgentMetadata | null;
   onSelectAgent?: (agent: AgentMetadata | null) => void;
+}
+
+function AgentConsole({ agent, onBack }: { agent: AgentMetadata, onBack: () => void }) {
+  const [messages, setMessages] = useState<VersMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  // Subscribe to system-wide events
+  useEventStream('/api/events', (event) => {
+    if (event.type === 'ThoughtResponse' && event.data.agent_id === agent.id) {
+      setIsTyping(false);
+      const newMsg: VersMessage = {
+        id: event.data.source_message_id + "-resp",
+        source: { type: 'Agent', id: agent.id },
+        content: event.data.content,
+        timestamp: new Date().toISOString(),
+        metadata: {}
+      };
+      setMessages(prev => [...prev, newMsg]);
+    }
+  });
+
+  const sendMessage = async () => {
+    if (!input.trim() || isTyping) return;
+
+    const userMsg: VersMessage = {
+      id: Date.now().toString(),
+      source: { type: 'User', id: 'user', name: 'User' },
+      target_agent: agent.id,
+      content: input,
+      timestamp: new Date().toISOString(),
+      metadata: { target_agent_id: agent.id }
+    };
+
+    setMessages(prev => [...prev, userMsg]);
+    setInput('');
+    setIsTyping(true);
+
+    try {
+      await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(userMsg)
+      });
+    } catch (err) {
+      console.error("Failed to send message:", err);
+      setIsTyping(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-full bg-white/40 backdrop-blur-3xl animate-in fade-in duration-500">
+      {/* Console Header */}
+      <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-white/60">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-[#2e4de6] text-white rounded-lg shadow-lg shadow-[#2e4de6]/20">
+            <Cpu size={18} />
+          </div>
+          <div>
+            <h2 className="text-sm font-black text-slate-800 tracking-tight uppercase">{agent.name} Console</h2>
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+              <span className="text-[8px] font-mono text-slate-400 uppercase tracking-widest">Neural Link Active</span>
+            </div>
+          </div>
+        </div>
+        <button 
+          onClick={onBack}
+          className="px-4 py-1.5 rounded-full border border-slate-200 text-[9px] font-bold text-slate-400 hover:text-[#2e4de6] hover:border-[#2e4de6]/30 transition-all uppercase tracking-widest"
+        >
+          Disconnect
+        </button>
+      </div>
+
+      {/* Message Stream */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-4 no-scrollbar">
+        {messages.length === 0 && (
+          <div className="h-full flex flex-col items-center justify-center text-slate-300 space-y-4">
+            <Zap size={32} strokeWidth={1} className="opacity-20" />
+            <p className="text-[10px] font-mono tracking-[0.2em] uppercase">Ready for instructions</p>
+          </div>
+        )}
+        {messages.map((msg) => {
+          const isUser = msg.source.type === 'User';
+          return (
+            <div key={msg.id} className={`flex items-start gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-sm ${
+                isUser ? 'bg-white border border-slate-100 text-slate-400' : 'bg-[#2e4de6] text-white'
+              }`}>
+                {isUser ? <UserIcon size={14} /> : <span className="text-[10px] font-black">AI</span>}
+              </div>
+              <div className={`max-w-[80%] p-4 rounded-2xl text-xs leading-relaxed shadow-sm ${
+                isUser 
+                  ? 'bg-white text-slate-700 rounded-tr-none'
+                  : 'bg-[#2e4de6] text-white rounded-tl-none'
+              }`}>
+                {msg.content}
+              </div>
+            </div>
+          );
+        })}
+        {isTyping && (
+          <div className="flex items-start gap-3 animate-pulse">
+            <div className="w-8 h-8 rounded-lg bg-[#2e4de6] text-white flex items-center justify-center shrink-0">
+              <Activity size={14} />
+            </div>
+            <div className="bg-slate-100 text-slate-400 p-3 rounded-2xl rounded-tl-none text-[10px] font-mono">
+              THINKING...
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Input Area */}
+      <div className="p-4 bg-white/60 border-t border-slate-100">
+        <div className="relative flex items-center">
+          <input 
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+            disabled={isTyping}
+            placeholder={isTyping ? "PROCESSING..." : "ENTER COMMAND..."}
+            className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 pr-12 text-xs font-mono focus:outline-none focus:border-[#2e4de6] transition-colors placeholder:text-slate-300 disabled:opacity-50 shadow-inner"
+          />
+          <button 
+            onClick={sendMessage}
+            disabled={isTyping || !input.trim()}
+            className="absolute right-2 p-2 bg-[#2e4de6] text-white rounded-lg hover:scale-105 active:scale-95 transition-all disabled:opacity-30 disabled:grayscale disabled:scale-100 shadow-lg shadow-[#2e4de6]/20"
+          >
+            <Send size={16} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function AgentTerminal({ 
@@ -70,20 +214,7 @@ export function AgentTerminal({
   }
 
   if (selectedAgent) {
-    // チャット画面（コンソール）へ遷移した状態（簡易実装）
-    return (
-      <div className="flex flex-col h-full bg-white/40 backdrop-blur-3xl p-8 items-center justify-center space-y-4">
-        <Cpu size={48} className="text-[#2e4de6] animate-pulse" />
-        <h2 className="text-xl font-black text-slate-800 tracking-widest uppercase">{selectedAgent.name} CONSOLE</h2>
-        <p className="text-xs text-slate-400 font-mono tracking-widest">ESTABLISHING NEURAL LINK...</p>
-        <button 
-          onClick={() => handleSelectAgent(null)}
-          className="mt-8 px-6 py-2 rounded-full border border-slate-200 text-[10px] font-bold text-slate-400 hover:text-[#2e4de6] transition-all"
-        >
-          DISCONNECT / BACK TO LIST
-        </button>
-      </div>
-    );
+    return <AgentConsole agent={selectedAgent} onBack={() => handleSelectAgent(null)} />;
   }
 
   return (

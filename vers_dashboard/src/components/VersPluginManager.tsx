@@ -19,7 +19,7 @@ function ConfigModal({ plugin, onClose }: { plugin: PluginManifest, onClose: () 
 
   const save = async (key: string, value: string) => {
     const newConfig = { ...config, [key]: value };
-    await api.updatePluginConfig(plugin.id, { [key]: value });
+    await api.updatePluginConfig(plugin.id, { key, value });
     setConfig(newConfig);
   };
 
@@ -55,9 +55,34 @@ function ConfigModal({ plugin, onClose }: { plugin: PluginManifest, onClose: () 
           </div>
         )}
 
-        <div className="mt-6 flex justify-end">
+        <div className="mt-6 flex justify-end gap-3">
           <button onClick={onClose} className="px-6 py-2 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors tracking-wide">
-            CLOSE
+            CANCEL
+          </button>
+          <button 
+            onClick={async (e) => {
+              e.preventDefault();
+              const btn = e.currentTarget;
+              btn.disabled = true;
+              btn.innerText = "SAVING...";
+              
+              try {
+                // Save all keys in parallel with correct format { key, value }
+                await Promise.all(
+                  Object.entries(config).map(([key, value]) => 
+                    api.updatePluginConfig(plugin.id, { key, value })
+                  )
+                );
+                onClose();
+              } catch (err) {
+                console.error("Failed to save config:", err);
+                btn.disabled = false;
+                btn.innerText = "SAVE ERROR (TRY AGAIN)";
+              }
+            }} 
+            className="px-6 py-2 bg-[#2e4de6] text-white rounded-lg text-xs font-bold hover:bg-[#1e3bb3] transition-all shadow-md shadow-[#2e4de6]/20 tracking-wide disabled:opacity-50"
+          >
+            SAVE & CLOSE
           </button>
         </div>
       </div>
@@ -107,12 +132,15 @@ export function VersPluginManager() {
   const applyChanges = async () => {
     setIsSaving(true);
     try {
-      // 全ての変更を順番に適用（現在は個別のapplyが必要な設計だが、api.togglePluginをループさせる）
-      for (const p of editingPlugins) {
-        const original = plugins.find(orig => orig.id === p.id);
-        if (original && original.is_active !== p.is_active) {
-          await api.togglePlugin(p.id, p.is_active);
-        }
+      const changes = editingPlugins
+        .filter(p => {
+          const original = plugins.find(orig => orig.id === p.id);
+          return original && original.is_active !== p.is_active;
+        })
+        .map(p => ({ id: p.id, is_active: p.is_active }));
+
+      if (changes.length > 0) {
+        await api.applyPluginSettings(changes);
       }
       setPlugins(JSON.parse(JSON.stringify(editingPlugins)));
     } catch (err) {
@@ -156,7 +184,7 @@ export function VersPluginManager() {
         <div>
           <h2 className="text-xl font-black tracking-tight text-slate-800 uppercase">System Plugins</h2>
           <p className="text-[10px] text-slate-400 font-mono tracking-widest uppercase mt-1">
-            VERS-SYSTEM Kernel v0.3.0 / Configuration Panel
+            VERS-SYSTEM Kernel v0.3.3 / Configuration Panel
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -200,7 +228,7 @@ export function VersPluginManager() {
                  <span className="text-[10px] font-black uppercase tracking-widest">Security</span>
                </div>
                <p className="text-[9px] leading-relaxed opacity-80">
-                 Plugins without mandatory tags are marked as UNVERIFIED.
+                 Only plugins signed with the official VERS SDK (Magic Seal) are marked as VERIFIED.
                </p>
              </div>
           </div>
@@ -210,7 +238,7 @@ export function VersPluginManager() {
         <div className="flex-1 overflow-y-auto p-6 no-scrollbar">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {filteredPlugins.map(plugin => {
-              const isVerified = MANDATORY_TAGS.some(tag => plugin.tags.includes(tag));
+              const isVerified = plugin.magic_seal === 0x56455253;
               return (
                 <div 
                   key={plugin.id}
@@ -240,9 +268,9 @@ export function VersPluginManager() {
                     <div className="flex items-center gap-2">
                       <h3 className="font-bold text-slate-800 text-sm">{plugin.name}</h3>
                       {isVerified ? (
-                        <CheckCircle2 size={14} className="text-emerald-500" />
+                        <CheckCircle2 size={14} className="text-emerald-500" title={`Verified (SDK v${plugin.sdk_version})`} />
                       ) : (
-                        <AlertTriangle size={14} className="text-amber-500" />
+                        <AlertTriangle size={14} className="text-amber-500" title="Unverified Plugin" />
                       )}
                     </div>
                     <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 leading-relaxed">
@@ -259,6 +287,11 @@ export function VersPluginManager() {
                     {!isVerified && (
                       <span className="px-2 py-0.5 bg-amber-100 text-amber-600 rounded text-[9px] font-black uppercase tracking-tighter">
                         UNVERIFIED
+                      </span>
+                    )}
+                    {isVerified && (
+                      <span className="px-2 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[9px] font-mono">
+                        v{plugin.sdk_version}
                       </span>
                     )}
                   </div>

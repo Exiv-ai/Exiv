@@ -22,6 +22,7 @@ pub struct CreateAgentRequest {
     pub name: String,
     pub description: String,
     pub default_engine: String,
+    pub metadata: Option<HashMap<String, String>>,
 }
 
 #[derive(Deserialize)]
@@ -30,15 +31,9 @@ pub struct UpdateConfigPayload {
     pub value: String,
 }
 
-/// プラグインのマニフェストにDBの設定を適用する共通ロジック
-fn apply_plugin_settings_to_manifest(
-    mut manifest: PluginManifest,
-    settings: &HashMap<String, bool>,
-) -> PluginManifest {
-    if let Some(&active) = settings.get(&manifest.id.to_string()) {
-        manifest.is_active = active;
-    }
-    manifest
+#[derive(Deserialize)]
+pub struct UpdateAgentRequest {
+    pub metadata: HashMap<String, String>,
 }
 
 /// 全エージェントのリストを取得
@@ -59,7 +54,12 @@ pub async fn create_agent(
 ) -> Json<serde_json::Value> {
     match state
         .agent_manager
-        .create_agent(&payload.name, &payload.description, &payload.default_engine)
+        .create_agent(
+            &payload.name,
+            &payload.description,
+            &payload.default_engine,
+            payload.metadata.unwrap_or_default(),
+        )
         .await
     {
         Ok(_) => Json(serde_json::json!({ "status": "success" })),
@@ -70,32 +70,30 @@ pub async fn create_agent(
     }
 }
 
+/// エージェント設定の更新
+pub async fn update_agent(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateAgentRequest>,
+) -> Json<serde_json::Value> {
+    match state.agent_manager.update_agent_config(&id, payload.metadata).await {
+        Ok(_) => Json(serde_json::json!({ "status": "success" })),
+        Err(e) => {
+            error!("❌ Failed to update agent {}: {}", id, e);
+            Json(serde_json::json!({ "status": "error", "message": e.to_string() }))
+        }
+    }
+}
+
 /// 全プラグインのリストを取得（DB設定を反映）
 pub async fn get_plugins(State(state): State<Arc<AppState>>) -> Json<Vec<PluginManifest>> {
-    let mut manifests = Vec::new();
-
-    // DBから設定をロード
-    let settings_result = sqlx::query_as::<_, crate::managers::PluginSetting>("SELECT * FROM plugin_settings")
-        .fetch_all(&state.pool)
-        .await;
-
-    let settings: HashMap<String, bool> = match settings_result {
-        Ok(list) => list
-            .into_iter()
-            .map(|s| (s.plugin_id, s.is_active))
-            .collect(),
+    match state.plugin_manager.list_plugins_with_settings(&state.registry).await {
+        Ok(manifests) => Json(manifests),
         Err(e) => {
-            error!("❌ Failed to load plugin settings from DB: {}", e);
-            HashMap::new()
+            error!("❌ Failed to list plugins: {}", e);
+            Json(vec![])
         }
-    };
-
-    // レジストリから全プラグインを取得
-    for manifest in state.registry.list_plugins() {
-        manifests.push(apply_plugin_settings_to_manifest(manifest, &settings));
     }
-
-    Json(manifests)
 }
 
 /// プラグイン設定の取得
@@ -123,7 +121,19 @@ pub async fn update_plugin_config(
         .update_config(&id, &payload.key, &payload.value)
         .await
     {
-        Ok(_) => Json(serde_json::json!({ "status": "success" })),
+        Ok(_) => {
+            info!("⚙️ Config updated for plugin: {}. Broadcasting update...", id);
+            
+            // 最新の全設定を取得して通知
+            if let Ok(full_config) = state.plugin_manager.get_config(&id).await {
+                let _ = state.event_tx.send(VersEvent::ConfigUpdated {
+                    plugin_id: id,
+                    config: full_config,
+                }).await;
+            }
+            
+            Json(serde_json::json!({ "status": "success" }))
+        },
         Err(e) => {
             error!("❌ Failed to update config for {}: {}", id, e);
             Json(serde_json::json!({ "status": "error", "message": e.to_string() }))
@@ -141,34 +151,43 @@ pub async fn apply_plugin_settings(
         payload.len()
     );
 
-    let mut tx = match state.pool.begin().await {
-        Ok(t) => t,
-        Err(e) => {
-            error!("❌ Failed to start transaction: {}", e);
-            return Json(false);
-        }
-    };
+    let settings = payload.into_iter().map(|i| (i.id, i.is_active)).collect();
 
-    for item in payload {
-        let res = sqlx::query(
-            "UPDATE plugin_settings SET is_active = ? WHERE plugin_id = ?",
-        )
-        .bind(item.is_active)
-        .bind(&item.id)
-        .execute(&mut *tx)
-        .await;
-
-        if let Err(e) = res {
-            error!("❌ Failed to save plugin setting for {}: {}", item.id, e);
-            return Json(false);
-        }
-    }
-
-    match tx.commit().await {
+    match state.plugin_manager.apply_settings(settings).await {
         Ok(_) => Json(true),
         Err(e) => {
-            error!("❌ Failed to commit transaction: {}", e);
+            error!("❌ Failed to apply plugin settings: {}", e);
             Json(false)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct GrantPermissionRequest {
+    pub permission: vers_shared::Permission,
+}
+
+/// プラグインに権限を付与（承認）
+pub async fn grant_permission_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(payload): Json<GrantPermissionRequest>,
+) -> Json<serde_json::Value> {
+    info!("🔐 Granting permission {:?} to plugin: {}", payload.permission, id);
+    
+    match state.plugin_manager.grant_permission(&id, payload.permission.clone()).await {
+        Ok(_) => {
+            // イベントループに通知して Capability を注入させる
+            let _ = state.event_tx.send(VersEvent::PermissionGranted {
+                plugin_id: id,
+                permission: payload.permission,
+            }).await;
+            
+            Json(serde_json::json!({ "status": "success" }))
+        },
+        Err(e) => {
+            error!("❌ Failed to grant permission to {}: {}", id, e);
+            Json(serde_json::json!({ "status": "error", "message": e.to_string() }))
         }
     }
 }

@@ -15,13 +15,13 @@ export const api = {
     return res.json();
   },
 
-  async togglePlugin(id: string, isActive: boolean): Promise<void> {
+  async applyPluginSettings(settings: { id: string, is_active: boolean }[]): Promise<void> {
     const res = await fetch(`${API_BASE}/plugins/apply`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, is_active: isActive })
+      body: JSON.stringify(settings)
     });
-    if (!res.ok) throw new Error(`Failed to toggle plugin: ${res.statusText}`);
+    if (!res.ok) throw new Error(`Failed to apply plugin settings: ${res.statusText}`);
   },
 
   async getPluginConfig(id: string): Promise<Record<string, string>> {
@@ -30,12 +30,30 @@ export const api = {
     return res.json();
   },
 
-  async updatePluginConfig(id: string, config: Record<string, string>): Promise<void> {
+  async updatePluginConfig(id: string, payload: { key: string, value: string }): Promise<void> {
     const res = await fetch(`${API_BASE}/plugins/${id}/config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config)
+      body: JSON.stringify(payload)
     });
     if (!res.ok) throw new Error(`Failed to update plugin config: ${res.statusText}`);
+  },
+
+  async updateAgent(id: string, payload: { metadata: Record<string, string> }): Promise<void> {
+    const res = await fetch(`${API_BASE}/agents/${id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(`Failed to update agent: ${res.statusText}`);
+  },
+
+  async grantPermission(pluginId: string, permission: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/plugins/${pluginId}/permissions/grant`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ permission })
+    });
+    if (!res.ok) throw new Error(`Failed to grant permission: ${res.statusText}`);
   }
 };

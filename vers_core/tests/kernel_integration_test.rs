@@ -7,38 +7,30 @@ use sqlx::SqlitePool;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tower::ServiceExt;
-use vers_shared::{Plugin, VersEvent, WebPlugin};
+use vers_shared::{Plugin, VersEvent};
 use std::any::Any;
 
-// 💡 統合テスト用に最小限のセットアップを模倣
 #[tokio::test]
 async fn test_dynamic_routing_registration() {
-    // 1. Setup minimal state (Omitted setup code for brevity, but keeping logic consistent)
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     sqlx::query("CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT, description TEXT, status TEXT, default_engine_id TEXT, metadata TEXT)").execute(&pool).await.unwrap();
-    sqlx::query("CREATE TABLE plugin_settings (plugin_id TEXT PRIMARY KEY, is_active BOOLEAN)")
+    sqlx::query("CREATE TABLE plugin_settings (plugin_id TEXT PRIMARY KEY, is_active BOOLEAN, allowed_permissions TEXT)")
         .execute(&pool)
         .await
         .unwrap();
     sqlx::query("CREATE TABLE plugin_configs (plugin_id TEXT, config_key TEXT, config_value TEXT, PRIMARY KEY(plugin_id, config_key))").execute(&pool).await.unwrap();
 
-    let (_tx, _rx) = broadcast::channel::<VersEvent>(100);
-    let (_event_tx, _event_rx) = mpsc::channel::<VersEvent>(100);
-
-    // 2. Initialize a real plugin to test its route
     let ds_plugin = Arc::new(DeepSeekPlugin::new(
         vers_shared::VersId::from_name("test"),
         None,
         None,
     ));
 
-    // 3. Manually build the router as main.rs does (using the new capability-driven registration)
     let mut dynamic_routes = axum::Router::new();
     if let Some(web) = ds_plugin.as_web() {
         dynamic_routes = web.register_routes(dynamic_routes);
     }
 
-    // Mock state matching the Router's expected state type in register_routes
     let mock_state = Arc::new("mock_state".to_string()) as Arc<dyn Any + Send + Sync>;
     let api_routes = axum::Router::new()
         .route("/health", axum::routing::get(|| async { "ok" }))
@@ -46,7 +38,6 @@ async fn test_dynamic_routing_registration() {
 
     let app = axum::Router::new().nest("/api", api_routes);
 
-    // 4. Test the dynamic route
     let response = app
         .oneshot(
             Request::builder()
@@ -62,10 +53,96 @@ async fn test_dynamic_routing_registration() {
 
 #[tokio::test]
 async fn test_permission_logic_unit() {
-    // Kernelのイベントループ内の権限検証ロジックが正しく Permission 型を扱えるかチェック
     let permission = vers_shared::Permission::InputControl;
     let mut permissions = Vec::new();
     permissions.push(permission.clone());
 
     assert!(permissions.contains(&vers_shared::Permission::InputControl));
+}
+
+#[tokio::test]
+async fn test_capability_injection_logic() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    sqlx::query("CREATE TABLE plugin_settings (plugin_id TEXT PRIMARY KEY, is_active BOOLEAN, allowed_permissions TEXT)").execute(&pool).await.unwrap();
+    
+    let perms_ok: Vec<vers_shared::Permission> = vec![vers_shared::Permission::NetworkAccess];
+    let client = Arc::new(vers_core::capabilities::SafeHttpClient::new());
+    let capability = if perms_ok.contains(&vers_shared::Permission::NetworkAccess) {
+        Some(client.clone() as Arc<dyn vers_shared::NetworkCapability>)
+    } else {
+        None
+    };
+    assert!(capability.is_some());
+
+    let perms_no: Vec<vers_shared::Permission> = vec![];
+    let capability = if perms_no.contains(&vers_shared::Permission::NetworkAccess) {
+        Some(client.clone() as Arc<dyn vers_shared::NetworkCapability>)
+    } else {
+        None
+    };
+    assert!(capability.is_none());
+}
+
+#[tokio::test]
+async fn test_panic_isolation() {
+    use vers_core::managers::PluginRegistry;
+    use vers_shared::{Plugin, PluginManifest, ServiceType, VersId};
+    use std::collections::HashMap;
+
+    struct PanicPlugin(VersId);
+    #[async_trait::async_trait]
+    impl Plugin for PanicPlugin {
+        fn manifest(&self) -> PluginManifest {
+            PluginManifest {
+                id: self.0,
+                name: "Panic".to_string(),
+                description: "".to_string(),
+                version: "".to_string(),
+                service_type: ServiceType::Reasoning,
+                tags: vec![],
+                is_active: true,
+                is_configured: true,
+                required_config_keys: vec![],
+                action_icon: None,
+                action_target: None,
+                required_permissions: vec![],
+                provided_capabilities: vec![],
+                provided_tools: vec![],
+            }
+        }
+        fn as_any(&self) -> &dyn std::any::Any { self }
+        async fn on_event(&self, _e: &vers_shared::VersEvent) -> anyhow::Result<Option<vers_shared::VersEvent>> {
+            panic!("Boom!");
+        }
+    }
+
+    struct NormalPlugin(Arc<tokio::sync::mpsc::Sender<bool>>, VersId);
+    #[async_trait::async_trait]
+    impl Plugin for NormalPlugin {
+        fn manifest(&self) -> PluginManifest {
+            PluginManifest { id: self.1, name: "Normal".to_string(), ..PanicPlugin(self.1).manifest() }
+        }
+        fn as_any(&self) -> &dyn std::any::Any { self }
+        async fn on_event(&self, _e: &vers_shared::VersEvent) -> anyhow::Result<Option<vers_shared::VersEvent>> {
+            let _ = self.0.send(true).await;
+            Ok(None)
+        }
+    }
+
+    let mut registry = PluginRegistry::new();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    
+    let id_panic = VersId::new();
+    let id_normal = VersId::new();
+    
+    registry.plugins.insert("panic".into(), Arc::new(PanicPlugin(id_panic)));
+    registry.plugins.insert("normal".into(), Arc::new(NormalPlugin(Arc::new(tx), id_normal)));
+
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(10);
+    let event = vers_shared::VersEvent::SystemNotification("test".into());
+
+    registry.dispatch_event(&event, &event_tx).await;
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv()).await;
+    assert!(result.is_ok());
 }

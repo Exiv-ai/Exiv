@@ -1,4 +1,4 @@
-use crate::managers::{MessageRouter, PluginRegistry};
+use crate::managers::{PluginRegistry, PluginManager};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info};
@@ -6,19 +6,19 @@ use vers_shared::{Permission, VersEvent};
 
 pub struct EventProcessor {
     registry: Arc<PluginRegistry>,
-    router: Arc<MessageRouter>,
+    plugin_manager: Arc<PluginManager>,
     tx_internal: broadcast::Sender<VersEvent>,
 }
 
 impl EventProcessor {
     pub fn new(
         registry: Arc<PluginRegistry>,
-        router: Arc<MessageRouter>,
+        plugin_manager: Arc<PluginManager>,
         tx_internal: broadcast::Sender<VersEvent>,
     ) -> Self {
         Self {
             registry,
-            router,
+            plugin_manager,
             tx_internal,
         }
     }
@@ -31,69 +31,61 @@ impl EventProcessor {
         info!("🧠 Kernel Event Processor Loop started.");
 
         while let Some(event) = event_rx.recv().await {
-            match event.clone() {
-                VersEvent::MessageReceived(msg) => {
-                    // 全体に通知
-                    let _ = self
-                        .tx_internal
-                        .send(VersEvent::MessageReceived(msg.clone()));
+            // 1. 全プラグイン（および内部システムハンドラ）に配信
+            self.registry.dispatch_event(&event, &event_tx).await;
 
-                    // ルーティング
-                    let router_clone = self.router.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = router_clone.route(msg).await {
-                            error!("❌ Routing Error: {}", e);
-                        }
-                    });
-                }
+            // 2. 内部イベント分岐処理
+            match event.clone() {
                 VersEvent::ThoughtResponse {
                     agent_id,
                     content,
                     source_message_id: _,
                 } => {
                     info!("🧠 Received ThoughtResponse from Agent: {}", agent_id);
-                    // 思考結果をメッセージとして配信
                     let msg = vers_shared::VersMessage::new(
-                        vers_shared::MessageSource::Agent(agent_id),
+                        vers_shared::MessageSource::Agent { id: agent_id },
                         content,
                     );
-
-                    // 全体に配信 (SSE用)
-                    let _ = self
-                        .tx_internal
-                        .send(VersEvent::MessageReceived(msg.clone()));
-
-                    // メモリ保存等のために再度バスに投入 (MessageReceivedとして)
-                    // これにより、将来的にプラグインがこの応答にさらに反応できる
+                    let _ = self.tx_internal.send(VersEvent::MessageReceived(msg.clone()));
                     let _ = event_tx.send(VersEvent::MessageReceived(msg)).await;
                 }
                 VersEvent::ActionRequested { requester, action } => {
-                    // 🛡️ Permission Enforcement Layer
-                    if self.authorize(&requester, Permission::InputControl) {
+                    if self.authorize(&requester, Permission::InputControl).await {
                         info!("✅ Action authorized for plugin: {}", requester);
-                        let _ = self
-                            .tx_internal
-                            .send(VersEvent::ActionRequested { requester, action });
+                        let _ = self.tx_internal.send(VersEvent::ActionRequested { requester, action });
                     } else {
                         error!("🚫 SECURITY VIOLATION: Plugin {} attempted Action without InputControl permission.", requester);
                     }
                 }
+                VersEvent::PermissionGranted { plugin_id, permission } => {
+                    info!("🔐 Permission {:?} GRANTED to plugin: {}", permission, plugin_id);
+                    
+                    // 1. 権限リストの更新 (In-memory)
+                    let vers_id = vers_shared::VersId::from_name(&plugin_id);
+                    self.registry.update_effective_permissions(vers_id, permission.clone()).await;
+                    
+                    // 2. Capability の注入
+                    if let Some(plugin) = self.registry.plugins.get(&plugin_id) {
+                        if let Some(cap) = self.plugin_manager.get_capability_for_permission(&permission) {
+                            info!("💉 Injecting capability into {}", plugin_id);
+                            if let Err(e) = plugin.on_capability_injected(cap).await {
+                                error!("❌ Failed to inject capability into {}: {}", plugin_id, e);
+                            }
+                        }
+                    }
+                }
                 _ => {
-                    // その他のイベントは全プラグインに配信
-                    self.registry.dispatch_event(&event, &event_tx).await;
-                    // SSE等への内部通知
+                    // SSE等への通知
                     let _ = self.tx_internal.send(event);
                 }
             }
         }
     }
 
-    fn authorize(&self, requester_id: &vers_shared::VersId, required: Permission) -> bool {
-        for plugin in self.registry.plugins.values() {
-            let manifest = plugin.manifest();
-            if manifest.id == *requester_id {
-                return manifest.required_permissions.contains(&required);
-            }
+    async fn authorize(&self, requester_id: &vers_shared::VersId, required: Permission) -> bool {
+        let perms_lock = self.registry.effective_permissions.read().await;
+        if let Some(perms) = perms_lock.get(requester_id) {
+            return perms.contains(&required);
         }
         false
     }

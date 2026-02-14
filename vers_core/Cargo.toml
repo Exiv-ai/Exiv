@@ -9,6 +9,7 @@ plugin_ks2_2 = { path = "../vers_plugins/plugin_ks2_2" }
 plugin_deepseek = { path = "../vers_plugins/plugin_deepseek" }
 plugin_cerebras = { path = "../vers_plugins/plugin_cerebras" }
 plugin_cursor = { path = "../vers_plugins/plugin_cursor" }
+plugin_python_bridge = { path = "../vers_plugins/plugin_python_bridge" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { Puzzle, X, Brain, Database, Zap, Globe, Cpu, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Puzzle, X, Brain, Database, Zap, Globe, Cpu, CheckCircle2, Save } from 'lucide-react';
 import { PluginManifest, AgentMetadata } from '../types';
+import { api } from '../services/api';
 
 interface Props {
   agent: AgentMetadata;
@@ -20,12 +21,41 @@ export function AgentPluginWorkspace({ agent, availablePlugins, onBack }: Props)
   const [configs, setConfigs] = useState<InstalledConfig[]>([]);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [isDraggingFromLibrary, setIsDraggingFromLibrary] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (agent.metadata.plugin_layout) {
+      try {
+        const layout = JSON.parse(agent.metadata.plugin_layout);
+        setConfigs(layout);
+      } catch (e) {
+        console.error("Failed to parse plugin layout:", e);
+      }
+    }
+  }, [agent]);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const metadata = { 
+        ...agent.metadata, 
+        plugin_layout: JSON.stringify(configs) 
+      };
+      await api.updateAgent(agent.id, { metadata });
+      onBack(); // Close the workspace after saving
+    } catch (err) {
+      console.error("Failed to save neural matrix:", err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const AGENT_COMPATIBLE_TAGS = ['#MIND', '#MEMORY', '#TOOL', '#LLM'];
+  const COMPATIBLE_SERVICES = ['Reasoning', 'Memory', 'Skill', 'Action'];
 
   const libraryPlugins = availablePlugins.filter(p => 
     !configs.find(c => c.pluginId === p.id) &&
-    p.tags.some(tag => AGENT_COMPATIBLE_TAGS.includes(tag))
+    (p.tags.some(tag => AGENT_COMPATIBLE_TAGS.includes(tag)) || COMPATIBLE_SERVICES.includes(p.service_type))
   );
 
   const handleDragStartFromLibrary = (id: string) => {
@@ -184,14 +214,20 @@ export function AgentPluginWorkspace({ agent, availablePlugins, onBack }: Props)
           })}
         </div>
 
-        {/* Footer */}
         <div className="p-4 bg-white/80 border-t border-slate-100 flex items-center justify-between px-8 text-[9px] font-mono text-slate-400">
            <div className="flex gap-4">
              <span>COORDINATE_SYSTEM: ACTIVE</span>
              <span>MATRIX_STABILITY: 100%</span>
            </div>
-           <button className="px-6 py-2 bg-[#2e4de6] text-white rounded-xl font-bold tracking-widest shadow-lg shadow-[#2e4de6]/20 transition-all active:scale-95">
-             SYNC NEURAL MATRIX
+           <button 
+             onClick={handleSave}
+             disabled={isSaving}
+             className="flex items-center gap-2 px-8 py-2 bg-[#2e4de6] text-white rounded-xl font-bold tracking-widest shadow-lg shadow-[#2e4de6]/20 transition-all active:scale-95 disabled:opacity-50"
+           >
+             {isSaving ? (
+               <div className="w-3 h-3 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+             ) : <Save size={14} />}
+             Save and exit
            </button>
         </div>
       </div>

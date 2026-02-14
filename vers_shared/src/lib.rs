@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+pub use vers_macros::vers_plugin;
+pub use inventory;
+
 /// VERSプラットフォーム内での一意の識別子（Agent, Plugin, Session等）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -42,6 +45,8 @@ pub enum CapabilityType {
     Vision,
     /// 物理/ハードウェア操作能力
     HAL,
+    /// Webサーバー拡張能力 (APIエンドポイント提供)
+    Web,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -63,10 +68,38 @@ impl std::fmt::Display for Permission {
 }
 
 /// Kernelによって認可され、実行時に提供されるプラグインの権限・環境情報
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct PluginRuntimeContext {
     pub effective_permissions: Vec<Permission>,
+    pub store: Arc<dyn PluginDataStore>,
 }
+
+/// プラグインがデータを保存するための抽象ストレージインターフェース (Principle #4: Data Sovereignty / Principle #6: SAL)
+#[async_trait]
+pub trait PluginDataStore: Send + Sync {
+    /// JSON形式でデータを保存
+    async fn set_json(&self, plugin_id: &str, key: &str, value: serde_json::Value) -> anyhow::Result<()>;
+    /// JSON形式でデータを取得
+    async fn get_json(&self, plugin_id: &str, key: &str) -> anyhow::Result<Option<serde_json::Value>>;
+}
+
+/// SALを型安全に利用するための拡張トレイト
+#[async_trait]
+pub trait SALExt: PluginDataStore {
+    async fn save<T: Serialize + Sync>(&self, plugin_id: &str, key: &str, value: &T) -> anyhow::Result<()> {
+        self.set_json(plugin_id, key, serde_json::to_value(value)?).await
+    }
+
+    async fn load<T: for<'de> Deserialize<'de>>(&self, plugin_id: &str, key: &str) -> anyhow::Result<Option<T>> {
+        if let Some(json) = self.get_json(plugin_id, key).await? {
+            Ok(Some(serde_json::from_value(json)?))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl<T: PluginDataStore + ?Sized> SALExt for T {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpRequest {
@@ -87,6 +120,12 @@ pub trait NetworkCapability: Send + Sync {
     async fn send_http_request(&self, request: HttpRequest) -> anyhow::Result<HttpResponse>;
 }
 
+/// 実行時に注入される具体的な能力のラッパー
+#[derive(Clone)]
+pub enum PluginCapability {
+    Network(Arc<dyn NetworkCapability>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServiceType {
     Communication,
@@ -100,7 +139,7 @@ pub enum ServiceType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
-    pub id: VersId,
+    pub id: String,
     pub name: String,
     pub description: String,
     pub version: String,
@@ -111,23 +150,27 @@ pub struct PluginManifest {
     pub required_config_keys: Vec<String>,
     pub action_icon: Option<String>,
     pub action_target: Option<String>,
+    pub icon_data: Option<String>,
+    pub magic_seal: u32,
+    pub sdk_version: String,
     pub required_permissions: Vec<Permission>,
     pub provided_capabilities: Vec<CapabilityType>,
     pub provided_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum MessageSource {
     User { id: String, name: String },
-    Agent(VersId),
+    Agent { id: String },
     System,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersMessage {
-    pub id: VersId,
+    pub id: String,
     pub source: MessageSource,
-    pub target_agent: Option<VersId>,
+    pub target_agent: Option<String>,
     pub content: String,
     pub timestamp: DateTime<Utc>,
     pub metadata: HashMap<String, String>,
@@ -136,7 +179,7 @@ pub struct VersMessage {
 impl VersMessage {
     pub fn new(source: MessageSource, content: String) -> Self {
         Self {
-            id: VersId::new(),
+            id: VersId::new().to_string(),
             source,
             target_agent: None,
             content,
@@ -169,9 +212,19 @@ pub struct DetectedElement {
     pub attributes: HashMap<String, String>,
 }
 
+/// プラグインのダウンキャストを補助するためのトレイト
+pub trait PluginCast {
+    fn as_any(&self) -> &dyn Any;
+    fn as_tool(&self) -> Option<&dyn Tool> { None }
+    fn as_communication(&self) -> Option<&dyn CommunicationAdapter> { None }
+    fn as_reasoning(&self) -> Option<&dyn ReasoningEngine> { None }
+    fn as_memory(&self) -> Option<&dyn MemoryProvider> { None }
+    fn as_web(&self) -> Option<&dyn WebPlugin> { None }
+}
+
 /// 全てのプラグインが実装するベースとなるマーカートレイト
 #[async_trait]
-pub trait Plugin: Any + Send + Sync {
+pub trait Plugin: Any + Send + Sync + PluginCast {
     fn manifest(&self) -> PluginManifest;
 
     /// プラグイン自体の初期化（権限の割り当てなど）
@@ -194,23 +247,12 @@ pub trait Plugin: Any + Send + Sync {
         Ok(())
     }
 
-    // Cast methods for safe trait object usage
-    fn as_any(&self) -> &dyn Any;
-
-    fn as_tool(&self) -> Option<&dyn Tool> {
-        None
-    }
-    fn as_communication(&self) -> Option<&dyn CommunicationAdapter> {
-        None
-    }
-    fn as_reasoning(&self) -> Option<&dyn ReasoningEngine> {
-        None
-    }
-    fn as_memory(&self) -> Option<&dyn MemoryProvider> {
-        None
-    }
-    fn as_web(&self) -> Option<&dyn WebPlugin> {
-        None
+    /// 実行中に権限が承認され、Capabilityが注入された際のフック
+    async fn on_capability_injected(
+        &self,
+        _capability: PluginCapability,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 
@@ -250,13 +292,47 @@ pub trait ReasoningEngine: Plugin {
 #[async_trait]
 pub trait MemoryProvider: Plugin {
     fn name(&self) -> &str;
-    async fn store(&self, agent_id: VersId, message: VersMessage) -> anyhow::Result<()>;
+    async fn store(&self, agent_id: String, message: VersMessage) -> anyhow::Result<()>;
     async fn recall(
         &self,
-        agent_id: VersId,
+        agent_id: String,
         query: &str,
         limit: usize,
     ) -> anyhow::Result<Vec<VersMessage>>;
+}
+
+#[async_trait]
+pub trait EventHandler: Send + Sync {
+    async fn handle(&self, event: &VersEvent) -> anyhow::Result<Option<VersEvent>>;
+}
+
+pub struct EventRouter {
+    pub handlers: HashMap<String, Box<dyn EventHandler>>,
+}
+
+impl EventRouter {
+    pub fn new() -> Self {
+        Self { handlers: HashMap::new() }
+    }
+
+    pub fn on<F, Fut>(&mut self, event_type: &str, handler: F)
+    where
+        F: Fn(VersEvent) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = anyhow::Result<Option<VersEvent>>> + Send + 'static,
+    {
+        struct FuncHandler<F>(F);
+        #[async_trait]
+        impl<F, Fut> EventHandler for FuncHandler<F>
+        where
+            F: Fn(VersEvent) -> Fut + Send + Sync + 'static,
+            Fut: std::future::Future<Output = anyhow::Result<Option<VersEvent>>> + Send + 'static,
+        {
+            async fn handle(&self, event: &VersEvent) -> anyhow::Result<Option<VersEvent>> {
+                (self.0)(event.clone()).await
+            }
+        }
+        self.handlers.insert(event_type.to_string(), Box::new(FuncHandler(handler)));
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,20 +349,42 @@ pub enum VersEvent {
     /// プラグインに対して思考（推論）を要求する
     ThoughtRequested {
         agent: AgentMetadata,
+        engine_id: String,
         message: VersMessage,
         context: Vec<VersMessage>,
     },
     /// プラグインからの思考結果
     ThoughtResponse {
-        agent_id: VersId,
+        agent_id: String,
         content: String,
-        source_message_id: VersId,
+        source_message_id: String,
+    },
+    /// プラグインの設定が更新された通知
+    ConfigUpdated {
+        plugin_id: String,
+        config: std::collections::HashMap<String, String>,
+    },
+    /// プラグインからの権限要求
+    PermissionRequested {
+        plugin_id: String,
+        permission: Permission,
+        reason: String,
+    },
+    /// 権限が承認された通知
+    PermissionGranted {
+        plugin_id: String,
+        permission: Permission,
+    },
+    /// マニフェストが更新された通知
+    ManifestUpdated {
+        plugin_id: String,
+        new_manifest: PluginManifest,
     },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMetadata {
-    pub id: VersId,
+    pub id: String,
     pub name: String,
     pub description: String,
     pub status: String,
@@ -296,8 +394,8 @@ pub struct AgentMetadata {
 }
 
 pub struct PluginConfig {
-    pub id: VersId,
-    pub config_values: HashMap<String, String>,
+    pub id: String,
+    pub config_values: std::collections::HashMap<String, String>,
 }
 
 #[async_trait]
@@ -306,3 +404,9 @@ pub trait PluginFactory: Send + Sync {
     fn service_type(&self) -> ServiceType;
     async fn create(&self, config: PluginConfig) -> anyhow::Result<Arc<dyn Plugin>>;
 }
+
+pub struct PluginRegistrar {
+    pub factory: fn() -> Arc<dyn PluginFactory>,
+}
+
+inventory::collect!(PluginRegistrar);

@@ -55,7 +55,7 @@ export const MemoryCore = memo(function MemoryCore({ isWindowMode = false, onClo
     }
   }, [isLocked]);
 
-  useEventStream('/events', (data) => {
+  useEventStream('/api/events', (data) => {
     if (data.type === 'MessageReceived' || data.type === 'VisionUpdated' || data.type === 'SystemNotification') {
        // On relevant events, refresh the data
        // Ideally we would append the new message/memory directly, but for now we re-fetch to ensure consistency
