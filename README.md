@@ -2,9 +2,19 @@
 
 Exiv (Existence × Virtual) is an AI agent orchestration platform written in Rust. It provides a plugin-based kernel where multiple AI engines, tools, and services communicate through an asynchronous event bus. An admin can control plugin permissions at runtime through a human-in-the-loop approval system.
 
-[![Version](https://img.shields.io/badge/version-β1-blue)]()
+[![Version](https://img.shields.io/badge/version-β1-blue)](https://github.com/Exiv-ai/Exiv/releases/latest)
 [![Tests](https://img.shields.io/badge/tests-78%20passing-brightgreen)]()
 [![License](https://img.shields.io/badge/license-BSL%201.1%20→%20MIT%202028-blue)](LICENSE)
+
+## Download
+
+| Platform | Installer | CLI |
+|----------|-----------|-----|
+| **Windows** | [**exiv-setup.exe**](https://github.com/Exiv-ai/Exiv/releases/latest) (GUI installer) | `irm https://raw.githubusercontent.com/Exiv-ai/Exiv/master/install.ps1 \| iex` |
+| **macOS** | — | `curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/install.sh \| bash` |
+| **Linux** | — | `curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/install.sh \| bash` |
+
+> All downloads are available on the [**Releases**](https://github.com/Exiv-ai/Exiv/releases/latest) page.
 
 ## Features
 
