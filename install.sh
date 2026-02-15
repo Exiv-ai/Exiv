@@ -4,7 +4,7 @@
 # Downloads a pre-built binary from GitHub Releases and installs it.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/install.sh | bash
 #
 # Environment variables:
 #   EXIV_PREFIX   Install directory (default: /opt/exiv)

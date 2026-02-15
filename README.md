@@ -22,13 +22,13 @@ Exiv (Existence × Virtual) is an AI agent orchestration platform written in Rus
 **Linux / macOS:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/Exiv-ai/Exiv/master/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/Exiv-ai/Exiv/master/install.ps1 | iex
 ```
 
 Both scripts detect your platform, download the correct binary, verify its checksum, and run the built-in installer. Customize with environment variables:
@@ -36,13 +36,13 @@ Both scripts detect your platform, download the correct binary, verify its check
 ```bash
 # Linux / macOS
 EXIV_PREFIX=/usr/local EXIV_SERVICE=true \
-  curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/scripts/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/install.sh | bash
 ```
 
 ```powershell
 # Windows
 $env:EXIV_PREFIX = "C:\Exiv"; $env:EXIV_SERVICE = "true"
-irm https://raw.githubusercontent.com/Exiv-ai/Exiv/master/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/Exiv-ai/Exiv/master/install.ps1 | iex
 ```
 
 ### From Source
