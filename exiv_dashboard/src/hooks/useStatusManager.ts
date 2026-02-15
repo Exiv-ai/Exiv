@@ -3,6 +3,27 @@ import { useEventStream } from './useEventStream';
 import { API_BASE } from '../services/api';
 import type { StrictSystemEvent } from '../types';
 
+const isTauri = '__TAURI_INTERNALS__' in window;
+
+/** Send an OS notification in Tauri mode (no-op in browser). */
+async function sendNativeNotification(title: string, body: string) {
+  if (!isTauri) return;
+  try {
+    const { isPermissionGranted, requestPermission, sendNotification } =
+      await import('@tauri-apps/plugin-notification');
+    let permitted = await isPermissionGranted();
+    if (!permitted) {
+      const result = await requestPermission();
+      permitted = result === 'granted';
+    }
+    if (permitted) {
+      sendNotification({ title, body });
+    }
+  } catch {
+    // Notification plugin not available or permission denied - silently skip
+  }
+}
+
 interface ThoughtLine {
   id: number;
   text: string;
@@ -49,6 +70,12 @@ export const useStatusManager = (fetchMetrics: () => void) => {
       // H-17: Cap event history to prevent unbounded memory growth
       setEventHistory(prev => [...prev, { ...data, timestamp: eventTimestamp }].slice(-500));
       if (data.type === "ToolEnd" || data.type === "MessageReceived") fetchMetrics();
+
+      // Forward SystemNotification events to OS notifications (Tauri only)
+      if (data.type === "SystemNotification" && isTauri) {
+        const message = typeof data.data === 'string' ? data.data : JSON.stringify(data.data);
+        sendNativeNotification("Exiv System", message);
+      }
     }
   }, [fetchMetrics, isHistoryLoaded]);
 

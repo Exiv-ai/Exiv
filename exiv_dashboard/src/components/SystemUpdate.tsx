@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { RefreshCw, Download, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 import { api, UpdateInfo } from '../services/api';
 
+const isTauri = '__TAURI_INTERNALS__' in window;
+
 type UpdateState = 'idle' | 'checking' | 'available' | 'up-to-date' | 'applying' | 'done' | 'error';
 
 // M-24: Timeout for update operations
@@ -21,7 +23,47 @@ export function SystemUpdate() {
     return () => { abortRef.current?.abort(); };
   }, []);
 
-  const checkForUpdate = async () => {
+  const checkForUpdateTauri = async () => {
+    setState('checking');
+    setError(null);
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const update = await check();
+      if (update) {
+        setInfo({
+          current_version: update.currentVersion,
+          latest_version: update.version,
+          update_available: true,
+          release_notes: update.body ?? undefined,
+        });
+        setState('available');
+      } else {
+        setInfo({ current_version: currentVersion, update_available: false });
+        setState('up-to-date');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to check for updates');
+      setState('error');
+    }
+  };
+
+  const applyUpdateTauri = async () => {
+    setState('applying');
+    setError(null);
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const update = await check();
+      if (update) {
+        await update.downloadAndInstall();
+        setState('done');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to apply update');
+      setState('error');
+    }
+  };
+
+  const checkForUpdateHttp = async () => {
     abortRef.current?.abort();
     abortRef.current = new AbortController();
     const timeoutId = setTimeout(() => abortRef.current?.abort(), UPDATE_TIMEOUT_MS);
@@ -46,7 +88,7 @@ export function SystemUpdate() {
     }
   };
 
-  const applyUpdate = async () => {
+  const applyUpdateHttp = async () => {
     if (!info?.latest_version) return;
     abortRef.current?.abort();
     abortRef.current = new AbortController();
@@ -70,6 +112,9 @@ export function SystemUpdate() {
       clearTimeout(timeoutId);
     }
   };
+
+  const checkForUpdate = isTauri ? checkForUpdateTauri : checkForUpdateHttp;
+  const applyUpdate = isTauri ? applyUpdateTauri : applyUpdateHttp;
 
   return (
     <div className="p-4 space-y-4">
