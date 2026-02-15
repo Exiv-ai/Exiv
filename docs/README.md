@@ -11,11 +11,11 @@ Documentation for Exiv design, development, and quality management.
 
 ## Current Status (2026-02-14)
 
-**Version:** 0.1.0-alpha.1
+**Version:** 0.1.0
 **Phase:** 6 Complete
 **Code Quality:** 90+/100 (A)
 **Design Principles Compliance:** 95+/100 (A)
-**Test Coverage:** 78 tests (39 unit + 39 integration)
+**Test Coverage:** 78 tests (45 unit + 33 integration)
 
 ### Recent Achievements (Phase 6)
 
@@ -39,7 +39,7 @@ Documentation for Exiv design, development, and quality management.
 
 | Plugin | Location | Description |
 |--------|----------|-------------|
-| exiv_macros | `crates/macros/README.md` | Macro optimization guide, icon embedding, CI/CD integration |
+| exiv_macros | [`crates/macros/README.md`](../crates/macros/README.md) | Macro optimization guide, icon embedding, CI/CD integration |
 | All plugins | `plugins/*/README.md` | Individual plugin documentation (WIP) |
 
 ## Getting Started

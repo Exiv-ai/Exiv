@@ -2,7 +2,7 @@
 
 Exiv (Existence × Virtual) is an AI agent orchestration platform written in Rust. It provides a plugin-based kernel where multiple AI engines, tools, and services communicate through an asynchronous event bus. An admin can control plugin permissions at runtime through a human-in-the-loop approval system.
 
-[![Version](https://img.shields.io/badge/version-β1-blue)](https://github.com/Exiv-ai/Exiv/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/Exiv-ai/Exiv/releases/latest)
 [![Tests](https://img.shields.io/badge/tests-78%20passing-brightgreen)]()
 [![License](https://img.shields.io/badge/license-BSL%201.1%20→%20MIT%202028-blue)](LICENSE)
 
@@ -115,14 +115,14 @@ docs/               Architecture docs, changelog, development guide
 
 | ID | Type | Description |
 |----|------|-------------|
-| `mind.deepseek` | Reasoning | DeepSeek R1 |
-| `mind.cerebras` | Reasoning | Cerebras Llama 3.3 70B |
-| `core.ks22` | Reasoning | Knowledge Store 2.2 — persistent key-value memory with chronological recall |
-| `core.moderator` | Reasoning | Consensus moderator for collective intelligence |
-| `hal.cursor` | HAL | Mouse/keyboard control interface |
-| `bridge.python` | Reasoning | Python subprocess bridge with self-healing restart |
-| `adapter.mcp` | Skill | Model Context Protocol client |
-| `vision.screen` | Vision | Screen capture and analysis |
+| `mind.deepseek` | Reasoning | Advanced reasoning using DeepSeek API |
+| `mind.cerebras` | Reasoning | Ultra-high-speed reasoning via Cerebras API |
+| `core.ks22` | Reasoning | Persistent key-value memory with chronological recall |
+| `core.moderator` | Reasoning | Consensus Moderator for collective intelligence |
+| `hal.cursor` | HAL | High-precision dot cursor with fluid motion trails |
+| `bridge.python` | Reasoning | Universal Python Bridge with asynchronous event streaming |
+| `adapter.mcp` | Skill | Model Context Protocol (MCP) Client Adapter |
+| `vision.screen` | Vision | Screen capture and analysis module |
 
 **Python plugins** (loaded through `bridge.python`):
 
@@ -184,10 +184,14 @@ All settings have sensible defaults. Optionally copy `.env.example` to `.env` to
 | `CORS_ORIGINS` | (none) | Allowed CORS origins (comma-separated) |
 | `ALLOWED_HOSTS` | (none) | Network whitelist for plugin access |
 | `EXIV_UPDATE_REPO` | (none) | GitHub `owner/repo` for update distribution |
+| `BIND_ADDRESS` | `127.0.0.1` | Server bind address (`0.0.0.0` for network access) |
+| `MEMORY_CONTEXT_LIMIT` | `10` | Maximum memory entries returned per recall |
+| `EVENT_HISTORY_SIZE` | `1000` | Maximum events kept in memory |
+| `EVENT_RETENTION_HOURS` | `24` | Hours to retain events before cleanup (1–720) |
 
 ## Testing
 
-78 tests (39 unit, 39 integration/plugin).
+78 tests (45 unit, 33 integration).
 
 ```bash
 cargo test                              # all tests
@@ -205,7 +209,7 @@ Admin endpoints are protected by API key authentication (`X-API-Key` header) and
 - [Architecture](docs/ARCHITECTURE.md) — Design principles, event flow, security model
 - [Development](docs/DEVELOPMENT.md) — Coding standards, guardrails, PR process
 - [Changelog](docs/CHANGELOG.md) — Development history
-- [Plugin Macros](exiv_macros/README.md) — `#[exiv_plugin]` usage and build optimization
+- [Plugin Macros](crates/macros/README.md) — `#[exiv_plugin]` usage and build optimization
 
 ## License
 

@@ -114,11 +114,37 @@
 - Security (C): 55 → ~75
 - Performance (D): 60 → ~80
 
+### Phase 6: Feature Expansion & Hardening (2026-02-14)
+
+**Trigger:** Post-Phase 5 stabilization
+
+| Category | Item | Status |
+|----------|------|--------|
+| Security | Human-in-the-Loop 権限承認ワークフロー (`permission_requests` テーブル) | Done |
+| Security | Rate Limiting: per-IP 10 req/s, burst 20 (`middleware.rs`) | Done |
+| Security | Audit Logging: セキュリティイベント全記録 | Done |
+| Security | .env ファイルパーミッション 0600 (Unix) | Done |
+| Security | BIND_ADDRESS デフォルト 127.0.0.1 (loopback only) | Done |
+| Security | CORS origin スキーム検証 (http/https のみ許可) | Done |
+| Security | cosign keyless署名 (リリースアーティファクト) | Done |
+| Quality | Unit Tests: handlers, db, capabilities, middleware, validation, config | Done |
+| Quality | Input validation モジュール (エージェント作成・設定更新) | Done |
+| Quality | Atomic file writes (.maintenance ファイル) | Done |
+| Feature | Self-Healing Python Bridge (自動再起動、最大3回) | Done |
+| Feature | Build Optimization (`EXIV_SKIP_ICON_EMBED=1`) | Done |
+| Feature | 全コメント英語化 (国際アクセシビリティ) | Done |
+| Feature | Windows GUI インストーラー (Inno Setup) | Done |
+| Feature | GitHub Pages ランディングページ (OS自動検出) | Done |
+| Infra | GitHub Actions リリースワークフロー (5プラットフォーム + インストーラー) | Done |
+
+**Test Count:** 78 tests (45 unit + 33 integration)
+**Audit Score:** 88/100
+
 ### Remaining Items (Next Phase)
 
-- [ ] Unit Tests: handlers, db, capabilities のユニットテスト追加
-- [ ] CSRF/Rate Limiting: tower ミドルウェア追加
 - [ ] Manifest Caching: exiv_macros 側でのキャッシュ実装
+- [ ] Event Envelope: Kernel 管理の封筒によるイベント改竄防止
+- [ ] Plugin hot-reload: ランタイムプラグイン再読み込み
 
 ---
 
@@ -162,3 +188,4 @@ Plugins maintain their own version numbers because they can evolve independently
 - 2026-02-08: Guardrails 初版作成 (Event Security, Cascading Protection, Lock Aggregation, Storage Consistency)
 - 2026-02-10: UI/UX Clarity, Physical Safety, MCP Resource Control, Privacy & Biometrics 追加
 - 2026-02-13: REFAC_STATUS.md と統合、Phase 5 完了ステータス追加
+- 2026-02-15: Phase 6 完了ステータス追加、残タスク更新
