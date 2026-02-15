@@ -14,7 +14,7 @@ Exiv (Existence × Virtual) is an AI agent orchestration platform written in Rus
 | **macOS** | — | `curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/install.sh \| bash` |
 | **Linux** | — | `curl -fsSL https://raw.githubusercontent.com/Exiv-ai/Exiv/master/install.sh \| bash` |
 
-> All downloads are available on the [**Releases**](https://github.com/Exiv-ai/Exiv/releases/latest) page.
+> Visit [**exiv-ai.github.io/Exiv**](https://exiv-ai.github.io/Exiv/) for one-click download, or browse all assets on the [**Releases**](https://github.com/Exiv-ai/Exiv/releases/latest) page.
 
 ## Features
 
