@@ -68,13 +68,23 @@ impl PythonBridgePlugin {
             .cloned()
             .unwrap_or_else(|| "scripts/bridge_main.py".to_string());
 
-        // Security: prevent path traversal attacks
-        if script_path.contains("..") {
-            return Err(anyhow::anyhow!("Script path must not contain '..': {}", script_path));
-        }
-        let path = std::path::Path::new(&script_path);
-        if path.is_absolute() || !path.starts_with("scripts/") {
-            return Err(anyhow::anyhow!("Script path must be relative and within 'scripts/' directory: {}", script_path));
+        // Security: prevent path traversal attacks using canonical path validation
+        // This prevents attacks like "scripts/../../../etc/passwd" or Windows "scripts\..\..\"
+        let base_dir = std::path::PathBuf::from("scripts/");
+        let candidate_path = base_dir.join(&script_path);
+
+        // Canonicalize both paths to resolve all symlinks and ".." components
+        let base_canonical = base_dir.canonicalize()
+            .map_err(|e| anyhow::anyhow!("Failed to resolve scripts directory: {}", e))?;
+        let candidate_canonical = candidate_path.canonicalize()
+            .map_err(|_| anyhow::anyhow!("Invalid or non-existent script path: {}", script_path))?;
+
+        // Ensure the resolved path is still within the base directory
+        if !candidate_canonical.starts_with(&base_canonical) {
+            return Err(anyhow::anyhow!(
+                "Security violation: Script path '{}' escapes allowed directory",
+                script_path
+            ));
         }
 
         Ok(Self {

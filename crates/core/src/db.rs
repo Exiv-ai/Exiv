@@ -19,6 +19,14 @@ impl SqliteDataStore {
 #[async_trait]
 impl PluginDataStore for SqliteDataStore {
     async fn set_json(&self, plugin_id: &str, key: &str, value: serde_json::Value) -> anyhow::Result<()> {
+        // Input validation
+        if key.contains('\0') {
+            return Err(anyhow::anyhow!("Key must not contain null bytes"));
+        }
+        if key.len() > 255 {
+            return Err(anyhow::anyhow!("Key exceeds maximum length (255 characters)"));
+        }
+
         let val_str = serde_json::to_string(&value)?;
         sqlx::query("INSERT OR REPLACE INTO plugin_data (plugin_id, key, value) VALUES (?, ?, ?)")
             .bind(plugin_id)
@@ -30,12 +38,20 @@ impl PluginDataStore for SqliteDataStore {
     }
 
     async fn get_json(&self, plugin_id: &str, key: &str) -> anyhow::Result<Option<serde_json::Value>> {
+        // Input validation
+        if key.contains('\0') {
+            return Err(anyhow::anyhow!("Key must not contain null bytes"));
+        }
+        if key.len() > 255 {
+            return Err(anyhow::anyhow!("Key exceeds maximum length (255 characters)"));
+        }
+
         let row: Option<(String,)> = sqlx::query_as("SELECT value FROM plugin_data WHERE plugin_id = ? AND key = ?")
             .bind(plugin_id)
             .bind(key)
             .fetch_optional(&self.pool)
             .await?;
-            
+
         if let Some((val_str,)) = row {
             let val = serde_json::from_str(&val_str)?;
             Ok(Some(val))
@@ -45,6 +61,14 @@ impl PluginDataStore for SqliteDataStore {
     }
 
     async fn get_all_json(&self, plugin_id: &str, key_prefix: &str) -> anyhow::Result<Vec<(String, serde_json::Value)>> {
+        // Input validation: prevent malicious characters
+        if key_prefix.contains('\0') {
+            return Err(anyhow::anyhow!("Key prefix must not contain null bytes"));
+        }
+        if key_prefix.len() > 255 {
+            return Err(anyhow::anyhow!("Key prefix exceeds maximum length (255 characters)"));
+        }
+
         // Escape LIKE special characters to prevent pattern injection
         let escaped_prefix = key_prefix.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("{}%", escaped_prefix);
