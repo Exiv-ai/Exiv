@@ -19,22 +19,14 @@ pub use db::{
 // Static Linker: Force plugin crates to be linked for inventory discovery
 // Without these imports, the Rust linker will not include plugin code,
 // causing inventory::submit! to never execute and plugins to be undiscoverable.
-#[allow(unused_imports)]
-use plugin_cerebras;
-#[allow(unused_imports)]
-use plugin_cursor;
-#[allow(unused_imports)]
-use plugin_deepseek;
-#[allow(unused_imports)]
-use plugin_ks22;
-#[allow(unused_imports)]
-use plugin_mcp;
-#[allow(unused_imports)]
-use plugin_moderator;
-#[allow(unused_imports)]
-use plugin_python_bridge;
-#[allow(unused_imports)]
-use plugin_vision;
+extern crate plugin_cerebras;
+extern crate plugin_cursor;
+extern crate plugin_deepseek;
+extern crate plugin_ks22;
+extern crate plugin_mcp;
+extern crate plugin_moderator;
+extern crate plugin_python_bridge;
+extern crate plugin_vision;
 
 use exiv_shared::ExivEvent;
 use sqlx::SqlitePool;
@@ -91,7 +83,11 @@ impl axum::response::IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let (status, err_type, message) = match self {
             AppError::Vers(e) => (axum::http::StatusCode::BAD_REQUEST, format!("{:?}", e), e.to_string()),
-            AppError::Internal(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "InternalError".to_string(), e.to_string()),
+            AppError::Internal(e) => {
+                // Log full error server-side only; return generic message to client
+                tracing::error!("Internal error: {}", e);
+                (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "InternalError".to_string(), "An internal error occurred".to_string())
+            },
             AppError::NotFound(m) => (axum::http::StatusCode::NOT_FOUND, "NotFound".to_string(), m),
         };
 
@@ -257,6 +253,7 @@ pub async fn run_kernel() -> anyhow::Result<()> {
         event_history,
         metrics,
         config.event_history_size,
+        config.event_retention_hours,
     ));
 
     // Start event history cleanup task
@@ -282,7 +279,6 @@ pub async fn run_kernel() -> anyhow::Result<()> {
     // Admin endpoints: rate-limited (10 req/s, burst 20)
     let admin_routes = Router::new()
         .route("/system/shutdown", post(handlers::shutdown_handler))
-        .route("/system/update/check", get(handlers::update::check_handler))
         .route("/system/update/apply", post(handlers::update::apply_handler))
         .route("/plugins/apply", post(handlers::apply_plugin_settings))
         .route("/plugins/:id/config", post(handlers::update_plugin_config))
@@ -292,6 +288,8 @@ pub async fn run_kernel() -> anyhow::Result<()> {
         .route("/events/publish", post(handlers::post_event_handler))
         .route("/permissions/:id/approve", post(handlers::approve_permission))
         .route("/permissions/:id/deny", post(handlers::deny_permission))
+        // M-08: chat_handler moved here to apply rate limiting
+        .route("/chat", post(handlers::chat_handler))
         .layer(axum::middleware::from_fn_with_state(
             app_state.clone(),
             middleware::rate_limit_middleware,
@@ -300,11 +298,11 @@ pub async fn run_kernel() -> anyhow::Result<()> {
     // Public/read endpoints (no rate limiting)
     let api_routes = Router::new()
         .route("/system/version", get(handlers::update::version_handler))
+        .route("/system/update/check", get(handlers::update::check_handler))
         .route("/events", get(handlers::sse_handler))
         .route("/history", get(handlers::get_history))
         .route("/metrics", get(handlers::get_metrics))
         .route("/memories", get(handlers::get_memories))
-        .route("/chat", post(handlers::chat_handler))
         .route("/plugins", get(handlers::get_plugins))
         .route("/plugins/:id/config", get(handlers::get_plugin_config))
         .route("/agents", get(handlers::get_agents))

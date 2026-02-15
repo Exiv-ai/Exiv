@@ -112,31 +112,27 @@ impl PythonBridgePlugin {
     const RESTART_COOLDOWN_SECS: u64 = 5;
 
     async fn ensure_process(&self) -> anyhow::Result<()> {
-        {
-            let lock = self.state.read().await;
-            if lock.process.is_some() {
-                return Ok(());
-            }
-        }
-
+        // C-03: Use single write lock to prevent race between read→write transition
         let mut state = self.state.write().await;
-        if state.process.is_none() {
-            // Check restart limits
-            if state.restart_count >= Self::MAX_RESTART_ATTEMPTS {
-                return Err(anyhow::anyhow!("Max restart attempts ({}) reached", Self::MAX_RESTART_ATTEMPTS));
-            }
-            if let Some(last) = state.last_restart {
-                if last.elapsed().as_secs() < Self::RESTART_COOLDOWN_SECS {
-                    return Err(anyhow::anyhow!("Restart cooldown active ({}s remaining)",
-                        Self::RESTART_COOLDOWN_SECS - last.elapsed().as_secs()));
+        if state.process.is_some() {
+            return Ok(());
+        }
+        {
+            // Check restart limits (only on actual restarts, not initial startup)
+            let is_restart = state.last_restart.is_some();
+            if is_restart {
+                if state.restart_count >= Self::MAX_RESTART_ATTEMPTS {
+                    return Err(anyhow::anyhow!("Max restart attempts ({}) reached", Self::MAX_RESTART_ATTEMPTS));
                 }
+                if let Some(last) = state.last_restart {
+                    if last.elapsed().as_secs() < Self::RESTART_COOLDOWN_SECS {
+                        return Err(anyhow::anyhow!("Restart cooldown active ({}s remaining)",
+                            Self::RESTART_COOLDOWN_SECS - last.elapsed().as_secs()));
+                    }
+                }
+                state.restart_count += 1;
+                info!("🔄 Restarting Python bridge (attempt {}/{})", state.restart_count, Self::MAX_RESTART_ATTEMPTS);
             }
-
-            // Update restart tracking
-            if state.restart_count > 0 {
-                info!("🔄 Restarting Python bridge (attempt {}/{})", state.restart_count + 1, Self::MAX_RESTART_ATTEMPTS);
-            }
-            state.restart_count += 1;
             state.last_restart = Some(std::time::Instant::now());
 
             let event_tx = state.event_tx.clone();
@@ -176,7 +172,15 @@ impl PythonBridgePlugin {
                                                         Some(exiv_shared::ExivEventData::GazeUpdated(gaze))
                                                     } else { None }
                                                 }
-                                                "SystemNotification" => Some(exiv_shared::ExivEventData::SystemNotification(ev_data.as_str().unwrap_or_default().to_string())),
+                                                "SystemNotification" => {
+                                                    match ev_data.as_str() {
+                                                        Some(s) => Some(exiv_shared::ExivEventData::SystemNotification(s.to_string())),
+                                                        None => {
+                                                            tracing::warn!("Invalid SystemNotification data: expected string, got {}", ev_data);
+                                                            None
+                                                        }
+                                                    }
+                                                }
                                                 _ => None
                                             };
                                             if let Some(d) = data {
@@ -235,62 +239,28 @@ impl PythonBridgePlugin {
             Self::send_raw(&mut stdin, id, "get_manifest", serde_json::Value::Null).await?;
             
             drop(state); // Release lock for receiver task to work
-            
-            let manifest_res = timeout(Duration::from_secs(5), rx).await?;
-            let manifest_json: serde_json::Value = manifest_res??;
+
+            let manifest_json: serde_json::Value = match timeout(Duration::from_secs(5), rx).await {
+                Ok(res) => res??,
+                Err(_) => {
+                    // Clean up orphaned pending_call entry on timeout
+                    let mut state = self.state.write().await;
+                    state.pending_calls.remove(&id);
+                    return Err(anyhow::anyhow!("Python bridge manifest handshake timed out"));
+                }
+            };
             
             let mut state = self.state.write().await;
             let mut manifest = self.auto_manifest();
             
-            // 📝 Python 側のマニフェストで上書き
-            if let Some(id) = manifest_json.get("id").and_then(|v| v.as_str()) {
-                manifest.id = id.to_string();
-            }
+            // 📝 Python 側のマニフェストで上書き (safe fields only)
+            // C-04: id, version, category, service_type, capabilities, required_permissions
+            // are NOT overridable from Python scripts (security-critical fields).
             if let Some(name) = manifest_json.get("name").and_then(|v| v.as_str()) {
                 manifest.name = name.to_string();
             }
             if let Some(desc) = manifest_json.get("description").and_then(|v| v.as_str()) {
                 manifest.description = desc.to_string();
-            }
-            if let Some(ver) = manifest_json.get("version").and_then(|v| v.as_str()) {
-                manifest.version = ver.to_string();
-            }
-            
-            // 📂 カテゴリとサービスタイプの動的パース
-            if let Some(cat_val) = manifest_json.get("category") {
-                if let Ok(cat) = serde_json::from_value(cat_val.clone()) {
-                    manifest.category = cat;
-                }
-            }
-            if let Some(st_val) = manifest_json.get("service_type") {
-                if let Ok(st) = serde_json::from_value(st_val.clone()) {
-                    manifest.service_type = st;
-                }
-            }
-
-            // 🛠️ 能力と権限の継承
-            if let Some(caps_val) = manifest_json.get("capabilities").and_then(|v| v.as_array()) {
-                let mut caps = Vec::new();
-                for c in caps_val {
-                    if let Ok(cap) = serde_json::from_value(c.clone()) {
-                        caps.push(cap);
-                    }
-                }
-                if !caps.is_empty() {
-                    manifest.provided_capabilities = caps;
-                }
-            }
-
-            if let Some(perms_val) = manifest_json.get("required_permissions").and_then(|v| v.as_array()) {
-                let mut perms = Vec::new();
-                for p in perms_val {
-                    if let Ok(perm) = serde_json::from_value(p.clone()) {
-                        perms.push(perm);
-                    }
-                }
-                if !perms.is_empty() {
-                    manifest.required_permissions = perms;
-                }
             }
 
             // 🧰 ツールとアクション情報の継承
@@ -321,32 +291,46 @@ impl PythonBridgePlugin {
             
             state.dynamic_manifest = Some(manifest);
             state.process = Some(PythonProcessHandle { child, stdin, reader_handle });
+            // Reset restart counter after successful handshake to prevent permanent lockout
+            state.restart_count = 0;
         }
         Ok(())
     }
 
+    // M-18: Maximum pending calls to prevent unbounded resource consumption
+    const MAX_PENDING_CALLS: usize = 50;
+
     pub async fn call_python(&self, method: &str, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-        self.ensure_process().await?; 
-        
-        let (id, tx) = {
+        self.ensure_process().await?;
+
+        // C-02: Single write lock for registration + send to prevent deadlock
+        let (id, rx) = {
             let mut state = self.state.write().await;
+            // M-18: Reject new calls when at capacity
+            if state.pending_calls.len() >= Self::MAX_PENDING_CALLS {
+                return Err(anyhow::anyhow!(
+                    "Python Bridge pending call limit reached ({})",
+                    Self::MAX_PENDING_CALLS
+                ));
+            }
             let id = state.next_call_id;
             state.next_call_id += 1;
             let (tx, rx) = oneshot::channel();
             state.pending_calls.insert(id, tx);
+
+            if let Some(proc) = state.process.as_mut() {
+                if let Err(e) = Self::send_raw(&mut proc.stdin, id, method, params).await {
+                    state.pending_calls.remove(&id);
+                    return Err(e);
+                }
+            } else {
+                state.pending_calls.remove(&id);
+                return Err(anyhow::anyhow!("Python process not running"));
+            }
             (id, rx)
         };
 
-        {
-            let mut state = self.state.write().await;
-            if let Some(proc) = state.process.as_mut() {
-                Self::send_raw(&mut proc.stdin, id, method, params).await?;
-            } else {
-                return Err(anyhow::anyhow!("Python process not running"));
-            }
-        }
-
-        match timeout(Duration::from_secs(10), tx).await {
+        match timeout(Duration::from_secs(10), rx).await {
             Ok(res) => res?,
             Err(_) => {
                 let mut state = self.state.write().await;
@@ -451,7 +435,10 @@ impl ReasoningEngine for PythonBridgePlugin {
     async fn think(&self, agent: &AgentMetadata, message: &ExivMessage, context: Vec<ExivMessage>) -> anyhow::Result<String> {
         let params = serde_json::json!({ "agent": agent, "message": message, "context": context });
         let result = self.call_python("think", params).await?;
-        Ok(result.as_str().unwrap_or_default().to_string())
+        let content = result.as_str()
+            .ok_or_else(|| anyhow::anyhow!("Python think() returned non-string: {}", result))?
+            .to_string();
+        Ok(content)
     }
 }
 
@@ -481,10 +468,11 @@ mod tests {
 
         let plugin = PythonBridgePlugin::new_plugin(config).await.unwrap();
 
-        // Simulate max restart attempts reached
+        // Simulate max restart attempts reached (must also set last_restart to indicate this is a restart)
         {
             let mut state = plugin.state.write().await;
             state.restart_count = PythonBridgePlugin::MAX_RESTART_ATTEMPTS;
+            state.last_restart = Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
         }
 
         // Next ensure_process should fail due to max attempts

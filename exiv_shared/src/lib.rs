@@ -9,6 +9,10 @@ use uuid::Uuid;
 pub use exiv_macros::exiv_plugin;
 pub use inventory;
 
+/// SDK version constant for consistent version reporting across all plugins
+/// M-14: Plugins should reference this instead of their own CARGO_PKG_VERSION
+pub const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Exivプラットフォーム内での一意の識別子（Agent, Plugin, Session等）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -20,6 +24,9 @@ impl std::fmt::Display for ExivId {
     }
 }
 
+/// L-02: Default generates a random UUID v4 (intentional design).
+/// Each default ExivId is unique, suitable for trace IDs and ephemeral identifiers.
+/// For deterministic IDs, use `ExivId::from_name()` instead.
 impl Default for ExivId {
     fn default() -> Self {
         Self::new()
@@ -79,7 +86,9 @@ impl std::fmt::Display for Permission {
     }
 }
 
+// M-13: Explicit serde tagging for consistent serialization
 #[derive(Debug, thiserror::Error, Serialize, Deserialize)]
+#[serde(tag = "type", content = "detail")]
 pub enum ExivError {
     #[error("Permission denied: {0}")]
     PermissionDenied(Permission),

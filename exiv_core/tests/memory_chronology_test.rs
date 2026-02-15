@@ -60,7 +60,7 @@ async fn test_memory_chronology_issue() {
     
     // If the bug is present, this assertion will likely fail because UUIDs are not chronological.
     // We expect the result to be chronological (Message 0 first, Message 4 last in the returned list).
-    for i in 0..5 {
-        assert_eq!(recalled[i].content, format!("Message {}", i), "Order mismatch at index {}", i);
+    for (i, item) in recalled.iter().enumerate().take(5) {
+        assert_eq!(item.content, format!("Message {}", i), "Order mismatch at index {}", i);
     }
 }

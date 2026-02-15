@@ -20,7 +20,7 @@ async fn test_python_bridge_initialization() {
 
     assert_eq!(manifest.id, "bridge.python");
     assert_eq!(manifest.name, "bridge.python");
-    assert_eq!(manifest.magic_seal, 0x45584956);
+    assert_eq!(manifest.magic_seal, 0x56455253); // VERS - official SDK magic seal
 }
 
 #[tokio::test]

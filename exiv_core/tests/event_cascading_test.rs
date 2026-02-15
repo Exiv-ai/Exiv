@@ -23,7 +23,7 @@ impl PluginCast for PingPlugin { fn as_any(&self) -> &dyn std::any::Any { self }
 #[async_trait::async_trait]
 impl Plugin for PingPlugin {
     fn manifest(&self) -> PluginManifest {
-        let m = PluginManifest {
+        PluginManifest {
             id: self.id.clone(),
             name: "Ping".to_string(),
             description: "".to_string(),
@@ -42,8 +42,7 @@ impl Plugin for PingPlugin {
             required_permissions: vec![],
             provided_capabilities: vec![],
             provided_tools: vec![],
-        };
-        m
+        }
     }
 
     async fn on_event(&self, event: &ExivEvent) -> anyhow::Result<Option<exiv_shared::ExivEventData>> {
@@ -96,6 +95,7 @@ async fn test_event_cascading_protection() {
         event_history,
         metrics,
         1000, // max_history_size
+        24,   // event_retention_hours
     );
 
     let tx_internal_for_loop = tx_internal.clone();

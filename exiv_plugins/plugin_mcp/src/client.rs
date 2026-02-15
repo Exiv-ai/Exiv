@@ -2,11 +2,12 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info};
 
 use crate::protocol::{
-    CallToolParams, CallToolResult, ClientCapabilities, ClientInfo, InitializeParams, 
+    CallToolParams, CallToolResult, ClientCapabilities, ClientInfo, InitializeParams,
     JsonRpcRequest, JsonRpcResponse, ListToolsResult
 };
 use crate::stdio::StdioTransport;
@@ -14,7 +15,8 @@ use crate::stdio::StdioTransport;
 pub struct McpClient {
     transport: Arc<Mutex<StdioTransport>>,
     pending_requests: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value>>>>>,
-    next_id: Arc<Mutex<i64>>,
+    // L-06: Use AtomicI64 for lock-free ID generation
+    next_id: Arc<AtomicI64>,
 }
 
 impl McpClient {
@@ -23,7 +25,7 @@ impl McpClient {
         let client = Self {
             transport: Arc::new(Mutex::new(transport)),
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
-            next_id: Arc::new(Mutex::new(1)),
+            next_id: Arc::new(AtomicI64::new(1)),
         };
 
         // Start response loop
@@ -70,6 +72,15 @@ impl McpClient {
                     }
                     None => {
                         error!("🔌 MCP Connection closed.");
+                        // C-06: Drain all pending requests with error on process crash
+                        let mut map = pending.lock().await;
+                        let count = map.len();
+                        for (_, tx) in map.drain() {
+                            let _ = tx.send(Err(anyhow::anyhow!("MCP server process terminated")));
+                        }
+                        if count > 0 {
+                            error!("🔌 Failed {} pending MCP requests due to process termination", count);
+                        }
                         break;
                     }
                 }
@@ -77,13 +88,12 @@ impl McpClient {
         });
     }
 
+    // M-17: Maximum pending requests to prevent unbounded resource consumption
+    const MAX_PENDING_REQUESTS: usize = 100;
+
     async fn call(&self, method: &str, params: Option<Value>) -> Result<Value> {
-        let id = {
-            let mut lock = self.next_id.lock().await;
-            let id = *lock;
-            *lock += 1;
-            id
-        };
+        // L-06: Lock-free atomic increment for request ID generation
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         let request = JsonRpcRequest::new(id, method, params);
         let req_str = serde_json::to_string(&request)?;
@@ -91,6 +101,13 @@ impl McpClient {
         let (tx, rx) = oneshot::channel();
         {
             let mut map = self.pending_requests.lock().await;
+            // M-17: Reject new requests when at capacity
+            if map.len() >= Self::MAX_PENDING_REQUESTS {
+                return Err(anyhow::anyhow!(
+                    "MCP pending request limit reached ({})",
+                    Self::MAX_PENDING_REQUESTS
+                ));
+            }
             map.insert(id, tx);
         }
 

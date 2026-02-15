@@ -1,5 +1,9 @@
 import { useEffect, useRef } from 'react';
 
+// M-22: Exponential backoff constants
+const INITIAL_DELAY_MS = 5000;
+const MAX_DELAY_MS = 30000;
+
 export function useEventStream(
   url: string,
   onMessage: (data: any) => void
@@ -7,6 +11,7 @@ export function useEventStream(
   const reconnectTimeout = useRef<number | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const onMessageRef = useRef(onMessage);
+  const attemptRef = useRef(0);
 
   useEffect(() => {
     onMessageRef.current = onMessage;
@@ -21,6 +26,7 @@ export function useEventStream(
       es.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          attemptRef.current = 0; // M-22: Reset backoff on successful message
           if (onMessageRef.current) {
             onMessageRef.current(data);
           }
@@ -30,10 +36,13 @@ export function useEventStream(
       };
 
       es.onerror = (err) => {
-        console.error("SSE Connection Error. Retrying in 5s...", err);
+        // M-22: Exponential backoff (5s, 10s, 20s, 30s max)
+        const delay = Math.min(INITIAL_DELAY_MS * Math.pow(2, attemptRef.current), MAX_DELAY_MS);
+        attemptRef.current++;
+        console.error(`SSE Connection Error. Retrying in ${delay / 1000}s...`, err);
         es.close();
         if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
-        reconnectTimeout.current = window.setTimeout(connect, 5000);
+        reconnectTimeout.current = window.setTimeout(connect, delay);
       };
     };
 

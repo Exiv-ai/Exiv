@@ -128,14 +128,16 @@ impl ReasoningEngine for CerebrasPlugin {
         message: &ExivMessage,
         context: Vec<ExivMessage>,
     ) -> anyhow::Result<String> {
-        let state = self.state.read().await;
-
-        if state.api_key.is_empty() {
-            return Err(anyhow::anyhow!("Cerebras API Key not configured."));
-        }
-
-        let client = state.http_client.clone()
-            .ok_or_else(|| anyhow::anyhow!("NetworkCapability not injected."))?;
+        // H-01: Clone needed data inside lock, release lock before network I/O
+        let (api_key, model_id, client) = {
+            let state = self.state.read().await;
+            if state.api_key.is_empty() {
+                return Err(anyhow::anyhow!("Cerebras API Key not configured."));
+            }
+            let client = state.http_client.clone()
+                .ok_or_else(|| anyhow::anyhow!("NetworkCapability not injected."))?;
+            (state.api_key.clone(), state.model_id.clone(), client)
+        };
 
         let mut messages = Vec::new();
         messages.push(serde_json::json!({
@@ -158,11 +160,11 @@ impl ReasoningEngine for CerebrasPlugin {
             method: "POST".to_string(),
             url: "https://api.cerebras.ai/v1/chat/completions".to_string(),
             headers: [
-                ("Authorization".to_string(), format!("Bearer {}", state.api_key)),
+                ("Authorization".to_string(), format!("Bearer {}", api_key)),
                 ("Content-Type".to_string(), "application/json".to_string())
             ].into_iter().collect(),
             body: Some(serde_json::json!({
-                "model": state.model_id,
+                "model": model_id,
                 "messages": messages,
                 "stream": false
             }).to_string()),
@@ -170,14 +172,19 @@ impl ReasoningEngine for CerebrasPlugin {
 
         let resp = client.send_http_request(req).await?;
         let json: serde_json::Value = serde_json::from_str(&resp.body)?;
-        
+
+        // H-02: Safe JSON path access with descriptive error
         if let Some(error) = json.get("error") {
-            return Err(anyhow::anyhow!("Cerebras API Error: {}", error["message"]));
+            let msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
+            return Err(anyhow::anyhow!("Cerebras API Error: {}", msg));
         }
 
-        let content = json["choices"][0]["message"]["content"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Invalid API response from Cerebras"))?
+        let content = json.get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid Cerebras API response: missing choices[0].message.content"))?
             .to_string();
 
         Ok(content)

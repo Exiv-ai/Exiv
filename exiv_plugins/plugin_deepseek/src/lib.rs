@@ -157,14 +157,16 @@ impl ReasoningEngine for DeepSeekPlugin {
         message: &ExivMessage,
         context: Vec<ExivMessage>,
     ) -> anyhow::Result<String> {
-        let state = self.state.read().await;
-
-        if state.api_key.is_empty() {
-            return Err(anyhow::anyhow!("DeepSeek API Key not configured."));
-        }
-
-        let client = state.http_client.clone()
-            .ok_or_else(|| anyhow::anyhow!("NetworkCapability not injected. Ensure 'NetworkAccess' permission is granted."))?;
+        // H-01: Clone needed data inside lock, release lock before network I/O
+        let (api_key, model_id, api_url, client) = {
+            let state = self.state.read().await;
+            if state.api_key.is_empty() {
+                return Err(anyhow::anyhow!("DeepSeek API Key not configured."));
+            }
+            let client = state.http_client.clone()
+                .ok_or_else(|| anyhow::anyhow!("NetworkCapability not injected. Ensure 'NetworkAccess' permission is granted."))?;
+            (state.api_key.clone(), state.model_id.clone(), state.api_url.clone(), client)
+        };
 
         let mut messages = Vec::new();
         messages.push(serde_json::json!({
@@ -185,13 +187,13 @@ impl ReasoningEngine for DeepSeekPlugin {
 
         let req = HttpRequest {
             method: "POST".to_string(),
-            url: state.api_url.clone(),
+            url: api_url,
             headers: [
-                ("Authorization".to_string(), format!("Bearer {}", state.api_key)),
+                ("Authorization".to_string(), format!("Bearer {}", api_key)),
                 ("Content-Type".to_string(), "application/json".to_string())
             ].into_iter().collect(),
             body: Some(serde_json::json!({
-                "model": state.model_id,
+                "model": model_id,
                 "messages": messages,
                 "stream": false
             }).to_string()),
@@ -199,9 +201,13 @@ impl ReasoningEngine for DeepSeekPlugin {
 
         let resp = client.send_http_request(req).await?;
         let json: serde_json::Value = serde_json::from_str(&resp.body)?;
-        let content = json["choices"][0]["message"]["content"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Invalid API response"))?
+        // H-02: Safe JSON path access with descriptive error
+        let content = json.get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid DeepSeek API response: missing choices[0].message.content"))?
             .to_string();
 
         Ok(content)

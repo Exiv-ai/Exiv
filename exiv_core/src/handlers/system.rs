@@ -93,7 +93,9 @@ impl SystemHandler {
                 correlation_id: None,
                 depth: 0,
             };
-            let _ = self.sender.send(envelope).await;
+            if let Err(e) = self.sender.send(envelope).await {
+                error!("Failed to dispatch ConsensusRequested: {}", e);
+            }
 
             // 各エンジンにも個別にThoughtRequestedを投げる (Moderatorが拾うため)
             for engine in &self.consensus_engines {
@@ -109,7 +111,9 @@ impl SystemHandler {
                     correlation_id: Some(trace_id),
                     depth: 1,
                 };
-                let _ = self.sender.send(env).await;
+                if let Err(e) = self.sender.send(env).await {
+                    error!("Failed to dispatch ThoughtRequested for engine {}: {}", engine, e);
+                }
             }
         } else {
             // 通常モード
@@ -145,13 +149,19 @@ impl SystemHandler {
                 // 🛑 停滞対策: 保存処理はバックグラウンドで行い、メインループをブロックしない
                 tokio::spawn(async move {
                     if let Some(mem) = plugin_clone.as_memory() {
-                        if let Err(e) = tokio::time::timeout(
+                        match tokio::time::timeout(
                             std::time::Duration::from_secs(5),
                             mem.store(agent_id.clone(), msg)
                         ).await {
-                            error!(agent_id = %agent_id, error = ?e, "❌ Memory store failed or timed out");
-                        } else {
-                            metrics.total_memories.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            Ok(Ok(())) => {
+                                metrics.total_memories.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            Ok(Err(e)) => {
+                                error!(agent_id = %agent_id, error = %e, "❌ Memory store failed");
+                            }
+                            Err(_) => {
+                                error!(agent_id = %agent_id, "❌ Memory store timed out (5s)");
+                            }
                         }
                     }
                 });

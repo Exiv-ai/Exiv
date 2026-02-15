@@ -9,6 +9,9 @@ use exiv_shared::{
 };
 use crate::capabilities::SafeHttpClient;
 
+/// L-01: Named constant for the official SDK magic seal value
+const OFFICIAL_SDK_MAGIC: u32 = 0x56455253; // "VERS" in ASCII
+
 #[derive(sqlx::FromRow, Debug)]
 pub struct PluginSetting {
     pub plugin_id: String,
@@ -30,13 +33,19 @@ pub struct SystemMetrics {
     pub total_episodes: std::sync::atomic::AtomicU64,
 }
 
-impl SystemMetrics {
-    pub fn new() -> Self {
+impl Default for SystemMetrics {
+    fn default() -> Self {
         Self {
             total_requests: std::sync::atomic::AtomicU64::new(0),
             total_memories: std::sync::atomic::AtomicU64::new(0),
             total_episodes: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+}
+
+impl SystemMetrics {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
@@ -53,7 +62,10 @@ impl PluginRegistry {
 
     pub async fn update_effective_permissions(&self, plugin_id: ExivId, permission: Permission) {
         let mut perms_lock = self.effective_permissions.write().await;
-        perms_lock.entry(plugin_id).or_default().push(permission);
+        let perms = perms_lock.entry(plugin_id).or_default();
+        if !perms.contains(&permission) {
+            perms.push(permission);
+        }
     }
 
     pub async fn list_plugins(&self) -> Vec<PluginManifest> {
@@ -86,7 +98,7 @@ impl PluginRegistry {
         let current_depth = envelope.depth;
         
         // 🚨 連鎖爆発の防止 (Guardrail #2)
-        if current_depth > self.max_event_depth {
+        if current_depth >= self.max_event_depth {
             error!(
                 event_type = ?event,
                 depth = current_depth,
@@ -99,6 +111,7 @@ impl PluginRegistry {
         let plugins = self.plugins.read().await;
         
         use futures::stream::{FuturesUnordered, StreamExt};
+        use futures::FutureExt;
         let mut futures = FuturesUnordered::new();
 
         for (id, plugin) in plugins.iter() {
@@ -116,8 +129,20 @@ impl PluginRegistry {
                         return (id, Ok(Ok(None)));
                     }
                 };
-                let result = tokio::time::timeout(timeout_duration, plugin.on_event(&event)).await;
-                drop(_permit);
+                // Catch panics to prevent semaphore permit leaks
+                let result = tokio::time::timeout(
+                    timeout_duration,
+                    async {
+                        match std::panic::AssertUnwindSafe(plugin.on_event(&event))
+                            .catch_unwind()
+                            .await
+                        {
+                            Ok(r) => r,
+                            Err(_) => Err(anyhow::anyhow!("Plugin panicked during on_event")),
+                        }
+                    }
+                ).await;
+                // _permit dropped here automatically (even on panic path above)
                 (id, result)
             }));
         }
@@ -259,13 +284,25 @@ impl PluginManager {
                 .entry("api_key".to_string()).or_insert(key);
         }
 
+        // M-11: Track failed plugins for summary reporting
+        let mut failed_plugins = Vec::new();
         for setting in settings {
             let pid = setting.plugin_id.clone();
             let config_values = config_map.remove(&pid).unwrap_or_default();
-            
+
             if let Err(e) = self.bootstrap_plugin(setting, config_values, &mut registry).await {
                 error!(plugin_id = %pid, error = %e, "❌ Failed to bootstrap plugin");
+                failed_plugins.push(pid);
             }
+        }
+
+        if !failed_plugins.is_empty() {
+            tracing::warn!(
+                count = failed_plugins.len(),
+                plugins = ?failed_plugins,
+                "⚠️ {} plugin(s) failed to initialize",
+                failed_plugins.len()
+            );
         }
 
         Ok(registry)
@@ -278,7 +315,8 @@ impl PluginManager {
                 .await?;
 
         let config_rows: Vec<(String, String, String)> =
-            sqlx::query_as("SELECT plugin_id, config_key, config_value FROM plugin_configs LIMIT 1000")
+            // H-07: Removed arbitrary LIMIT to ensure all plugin configs are loaded
+            sqlx::query_as("SELECT plugin_id, config_key, config_value FROM plugin_configs")
                 .fetch_all(&self.pool)
                 .await?;
 
@@ -320,7 +358,7 @@ impl PluginManager {
         let manifest = plugin.manifest();
         
         // 🛂 入国審査 (Magic Seal Validation)
-        if manifest.magic_seal != 0x56455253 {
+        if manifest.magic_seal != OFFICIAL_SDK_MAGIC {
             return Err(anyhow::anyhow!("Access Denied: Plugin '{}' is not compiled with official SDK", manifest.name));
         }
         
@@ -371,9 +409,9 @@ impl PluginManager {
         // 💉 Capability Injection
         let network_capability = if permissions.contains(&Permission::NetworkAccess) {
             self.get_capability_for_permission(&Permission::NetworkAccess)
-                .and_then(|c| {
+                .map(|c| {
                     let exiv_shared::PluginCapability::Network(net) = c;
-                    Some(net)
+                    net
                 })
         } else {
             None
@@ -381,13 +419,11 @@ impl PluginManager {
 
         plugin.on_plugin_init(context, network_capability).await?;
         
+        // H-05: Atomic plugin registration - acquire both locks before inserting
         {
             let mut plugins = registry.plugins.write().await;
-            plugins.insert(plugin_id_str.clone(), plugin.clone());
-        }
-
-        {
             let mut perms_lock = registry.effective_permissions.write().await;
+            plugins.insert(plugin_id_str.clone(), plugin.clone());
             perms_lock.insert(ExivId::from_name(&manifest.id), permissions);
         }
 
@@ -459,24 +495,23 @@ impl PluginManager {
     }
 
     pub async fn grant_permission(&self, plugin_id: &str, permission: exiv_shared::Permission) -> anyhow::Result<()> {
-        let mut tx = self.pool.begin().await?;
-
-        let row: (sqlx::types::Json<Vec<exiv_shared::Permission>>,) = sqlx::query_as("SELECT allowed_permissions FROM plugin_settings WHERE plugin_id = ?")
-            .bind(plugin_id)
-            .fetch_one(&mut *tx)
-            .await?;
-        
-        let mut perms = row.0.0;
-        if !perms.contains(&permission) {
-            perms.push(permission);
-            let perms_json = sqlx::types::Json(perms);
-            sqlx::query("UPDATE plugin_settings SET allowed_permissions = ? WHERE plugin_id = ?")
-                .bind(perms_json)
-                .bind(plugin_id)
-                .execute(&mut *tx)
-                .await?;
-            tx.commit().await?;
-        }
+        // H-08: Single atomic SQL statement to prevent TOCTOU race in permission grant
+        let perm_json = serde_json::to_string(&permission)?;
+        sqlx::query(
+            "UPDATE plugin_settings SET allowed_permissions = json_insert(
+                allowed_permissions,
+                '$[' || json_array_length(allowed_permissions) || ']',
+                json(?)
+            ) WHERE plugin_id = ?
+            AND NOT EXISTS (
+                SELECT 1 FROM json_each(allowed_permissions)
+                WHERE value = json_extract(json(?), '$')
+            )"
+        )
+        .bind(&perm_json)
+        .bind(plugin_id)
+        .bind(&perm_json)
+        .execute(&self.pool).await?;
         Ok(())
     }
 }
@@ -558,9 +593,9 @@ impl AgentManager {
         default_engine: &str,
         metadata: HashMap<String, String>,
         required_capabilities: Vec<exiv_shared::CapabilityType>,
-    ) -> anyhow::Result<ExivId> {
-        let id_str = format!("agent.{}", name.to_lowercase().replace(" ", "_"));
-        let id = ExivId::from_name(name);
+    ) -> anyhow::Result<String> {
+        // K-01: Return the actual DB id_str instead of a mismatched ExivId
+        let id_str = format!("agent.{}", name.to_lowercase().replace(' ', "_"));
         let metadata_json = serde_json::to_string(&metadata)?;
         let capabilities_json = serde_json::to_string(&required_capabilities)?;
 
@@ -574,7 +609,7 @@ impl AgentManager {
             .execute(&self.pool)
             .await?;
 
-        Ok(id)
+        Ok(id_str)
     }
 
     pub async fn update_agent_config(

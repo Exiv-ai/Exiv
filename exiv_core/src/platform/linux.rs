@@ -34,10 +34,7 @@ WantedBy=multi-user.target
 
 /// Register Exiv as a systemd service
 pub fn install_service(prefix: &Path, user: Option<&str>) -> anyhow::Result<()> {
-    let user = user.unwrap_or_else(|| {
-        // Default to current user
-        "root"
-    });
+    let user = user.unwrap_or("root");
 
     let unit = service_unit(prefix, user);
     info!("📝 Writing systemd service to {}", SERVICE_FILE);
@@ -112,10 +109,11 @@ pub fn set_executable_permission(path: &Path) -> anyhow::Result<()> {
 
 /// Swap a running binary (Unix: rename is safe even while running)
 pub fn swap_running_binary(new_path: &Path, current_path: &Path, old_path: &Path) -> anyhow::Result<()> {
-    // Remove previous backup if exists
-    if old_path.exists() {
-        std::fs::remove_file(old_path)
-            .with_context(|| format!("Failed to remove old backup: {}", old_path.display()))?;
+    // Remove previous backup if exists (ignore NotFound)
+    match std::fs::remove_file(old_path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(anyhow::anyhow!("Failed to remove old backup {}: {}", old_path.display(), e)),
     }
 
     // current → old (backup)
@@ -124,9 +122,14 @@ pub fn swap_running_binary(new_path: &Path, current_path: &Path, old_path: &Path
 
     // new → current (activate)
     std::fs::rename(new_path, current_path).map_err(|e| {
-        // Rollback on failure
-        let _ = std::fs::rename(old_path, current_path);
-        anyhow::anyhow!("Failed to install new binary (rolled back): {}", e)
+        // Attempt rollback on failure
+        match std::fs::rename(old_path, current_path) {
+            Ok(_) => anyhow::anyhow!("Failed to install new binary (rolled back): {}", e),
+            Err(rb_err) => {
+                eprintln!("CRITICAL: Binary install failed and rollback also failed! install_err={}, rollback_err={}", e, rb_err);
+                anyhow::anyhow!("Failed to install new binary AND rollback failed: install={}, rollback={}", e, rb_err)
+            }
+        }
     })?;
 
     Ok(())

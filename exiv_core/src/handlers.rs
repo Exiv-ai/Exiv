@@ -40,6 +40,8 @@ fn check_auth(state: &AppState, headers: &HeaderMap) -> AppResult<()> {
                     exiv_shared::Permission::AdminAccess
                 )));
             }
+            // M-09: Warn in debug builds when no API key is set
+            tracing::warn!("Admin API access without authentication (debug mode, no API key configured)");
         }
     }
     Ok(())
@@ -85,7 +87,20 @@ pub async fn create_agent(
     Json(payload): Json<CreateAgentRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
     check_auth(&state, &headers)?;
-    state
+
+    // M-07: Input validation
+    if payload.name.is_empty() || payload.name.len() > 200 {
+        return Err(AppError::Vers(exiv_shared::ExivError::ValidationError(
+            "Agent name must be 1-200 characters".to_string(),
+        )));
+    }
+    if payload.description.len() > 1000 {
+        return Err(AppError::Vers(exiv_shared::ExivError::ValidationError(
+            "Description must be at most 1000 characters".to_string(),
+        )));
+    }
+
+    let agent_id = state
         .agent_manager
         .create_agent(
             &payload.name,
@@ -98,7 +113,7 @@ pub async fn create_agent(
             ]),
         )
         .await?;
-    Ok(Json(serde_json::json!({ "status": "success" })))
+    Ok(Json(serde_json::json!({ "status": "success", "id": agent_id })))
 }
 
 /// Update agent settings
@@ -120,10 +135,13 @@ pub async fn get_plugins(State(state): State<Arc<AppState>>) -> AppResult<Json<s
 }
 
 /// Get plugin configuration
+/// K-04: Requires auth since config may contain API keys
 pub async fn get_plugin_config(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
+    check_auth(&state, &headers)?;
     let config = state.plugin_manager.get_config(&id).await?;
     Ok(Json(serde_json::json!(config)))
 }
@@ -150,7 +168,10 @@ pub async fn update_plugin_config(
             config: full_config,
         });
         let event = envelope.event.clone();
-        let _ = state.event_tx.send(envelope).await;
+        // H-04: Log send errors instead of silently ignoring
+        if let Err(e) = state.event_tx.send(envelope).await {
+            error!("Failed to send config update event: {}", e);
+        }
 
         // 監査ログに記録
         crate::db::spawn_audit_log(state.pool.clone(), crate::db::AuditLogEntry {
@@ -163,7 +184,7 @@ pub async fn update_plugin_config(
             reason: format!("Configuration key '{}' updated", payload.key),
             metadata: Some(serde_json::json!({
                 "key": payload.key,
-                "value": payload.value
+                "value_length": payload.value.len()
             })),
             trace_id: Some(event.trace_id.to_string()),
         });
@@ -217,7 +238,10 @@ pub async fn grant_permission_handler(
         permission: payload.permission.clone(),
     });
     let event = envelope.event.clone();
-    let _ = state.event_tx.send(envelope).await;
+    // H-04: Log send errors instead of silently ignoring
+    if let Err(e) = state.event_tx.send(envelope).await {
+        error!("Failed to send permission grant event: {}", e);
+    }
 
     // 監査ログに記録
     crate::db::spawn_audit_log(state.pool.clone(), crate::db::AuditLogEntry {
@@ -248,7 +272,10 @@ pub async fn shutdown_handler(
     let envelope = crate::EnvelopedEvent::system(exiv_shared::ExivEventData::SystemNotification(
         "Kernel is shutting down for maintenance...".to_string()
     ));
-    let _ = state.event_tx.send(envelope).await;
+    // H-04: Log send errors instead of silently ignoring
+    if let Err(e) = state.event_tx.send(envelope).await {
+        error!("Failed to send shutdown notification event: {}", e);
+    }
 
     // Execute shutdown asynchronously (after returning response)
     let shutdown = state.shutdown.clone();
@@ -279,10 +306,11 @@ pub async fn post_event_handler(
     check_auth(&state, &headers)?;
     // 🛡️ Security Check: 外部からの重要なシステムイベントの注入を禁止
     match &event_data {
+        // H-15: Only allow safe event types from external sources
+        // SystemNotification removed - external callers should not inject system notifications
         exiv_shared::ExivEventData::MessageReceived(_) |
         exiv_shared::ExivEventData::VisionUpdated(_) |
-        exiv_shared::ExivEventData::GazeUpdated(_) |
-        exiv_shared::ExivEventData::SystemNotification(_) => {
+        exiv_shared::ExivEventData::GazeUpdated(_) => {
             // これらは許可
         },
         _ => {
@@ -292,19 +320,26 @@ pub async fn post_event_handler(
     }
 
     let envelope = crate::EnvelopedEvent::system(event_data);
-    state.event_tx.send(envelope).await
-        .map_err(|e| anyhow::anyhow!(e))?;
+    if let Err(e) = state.event_tx.send(envelope).await {
+        error!("Failed to send external event: {}", e);
+        return Err(AppError::Internal(anyhow::anyhow!("Failed to publish event")));
+    }
     Ok(Json(serde_json::json!({ "status": "published" })))
 }
 
 /// メッセージ送信ハンドラ
+/// K-07: Requires auth since it injects events into the bus
 pub async fn chat_handler(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(msg): Json<ExivMessage>,
 ) -> AppResult<Json<serde_json::Value>> {
+    check_auth(&state, &headers)?;
     let envelope = crate::EnvelopedEvent::system(exiv_shared::ExivEventData::MessageReceived(msg));
-    state.event_tx.send(envelope).await
-        .map_err(|e| anyhow::anyhow!(e))?;
+    if let Err(e) = state.event_tx.send(envelope).await {
+        error!("Failed to send chat message event: {}", e);
+        return Err(AppError::Internal(anyhow::anyhow!("Failed to accept message")));
+    }
     Ok(Json(serde_json::json!({ "status": "accepted" })))
 }
 
@@ -390,6 +425,9 @@ pub async fn get_pending_permissions(
 /// Approve a permission request
 #[derive(Deserialize)]
 pub struct PermissionDecisionPayload {
+    // Accepted for backwards compatibility but not used for audit trail
+    // (actor identity determined from auth, not user-supplied value)
+    #[allow(dead_code)]
     approved_by: String,
 }
 
@@ -397,16 +435,18 @@ pub async fn approve_permission(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     axum::extract::Path(request_id): axum::extract::Path<String>,
-    Json(payload): Json<PermissionDecisionPayload>,
+    Json(_payload): Json<PermissionDecisionPayload>,
 ) -> AppResult<Json<serde_json::Value>> {
     check_auth(&state, &headers)?;
-    crate::update_permission_request(&state.pool, &request_id, "approved", &payload.approved_by).await?;
+    // Use fixed "admin" actor since auth is via single API key (not user-supplied value)
+    let actor_id = "admin".to_string();
+    crate::update_permission_request(&state.pool, &request_id, "approved", &actor_id).await?;
 
     // Write audit log
     crate::db::spawn_audit_log(state.pool.clone(), crate::AuditLogEntry {
         timestamp: chrono::Utc::now(),
         event_type: "PERMISSION_REQUEST_APPROVED".to_string(),
-        actor_id: Some(payload.approved_by.clone()),
+        actor_id: Some(actor_id),
         target_id: Some(request_id.clone()),
         permission: None,
         result: "SUCCESS".to_string(),
@@ -426,16 +466,18 @@ pub async fn deny_permission(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     axum::extract::Path(request_id): axum::extract::Path<String>,
-    Json(payload): Json<PermissionDecisionPayload>,
+    Json(_payload): Json<PermissionDecisionPayload>,
 ) -> AppResult<Json<serde_json::Value>> {
     check_auth(&state, &headers)?;
-    crate::update_permission_request(&state.pool, &request_id, "denied", &payload.approved_by).await?;
+    // Use fixed "admin" actor since auth is via single API key (not user-supplied value)
+    let actor_id = "admin".to_string();
+    crate::update_permission_request(&state.pool, &request_id, "denied", &actor_id).await?;
 
     // Write audit log
     crate::db::spawn_audit_log(state.pool.clone(), crate::AuditLogEntry {
         timestamp: chrono::Utc::now(),
         event_type: "PERMISSION_REQUEST_DENIED".to_string(),
-        actor_id: Some(payload.approved_by.clone()),
+        actor_id: Some(actor_id),
         target_id: Some(request_id.clone()),
         permission: None,
         result: "SUCCESS".to_string(),

@@ -46,7 +46,8 @@ export const useStatusManager = (fetchMetrics: () => void) => {
         return next.slice(-12);
       });
     } else {
-      setEventHistory(prev => [...prev, { ...data, timestamp: eventTimestamp }]);
+      // H-17: Cap event history to prevent unbounded memory growth
+      setEventHistory(prev => [...prev, { ...data, timestamp: eventTimestamp }].slice(-500));
       if (data.type === "ToolEnd" || data.type === "MessageReceived") fetchMetrics();
     }
   }, [fetchMetrics, isHistoryLoaded]);

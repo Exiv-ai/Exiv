@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { memo } from 'react';
 import { Brain, Sparkles, History, Activity, User, ArrowLeft } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -33,7 +33,7 @@ export const MemoryCore = memo(function MemoryCore({ isWindowMode = false, onClo
   const [isLocked, setIsLocked] = useState(true);
   const navigate = useNavigate();
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       const headers: Record<string, string> = {};
       const [memRes, epiRes, metRes] = await Promise.all([
@@ -48,19 +48,37 @@ export const MemoryCore = memo(function MemoryCore({ isWindowMode = false, onClo
     } catch (error) {
       console.error('Failed to fetch data', error);
     }
-  };
+  }, []);
+
+  // H-18: Debounce fetchData to prevent cascading API calls on rapid events
+  const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedFetchData = useCallback(() => {
+    if (fetchTimeoutRef.current) {
+      clearTimeout(fetchTimeoutRef.current);
+    }
+    fetchTimeoutRef.current = setTimeout(() => {
+      fetchData();
+    }, 300);
+  }, [fetchData]);
+
+  useEffect(() => {
+    return () => {
+      if (fetchTimeoutRef.current) {
+        clearTimeout(fetchTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!isLocked) {
       fetchData();
     }
-  }, [isLocked]);
+  }, [isLocked, fetchData]);
 
   useEventStream(`${API_BASE}/events`, (data) => {
     if (data.type === 'MessageReceived' || data.type === 'VisionUpdated' || data.type === 'SystemNotification') {
-       // On relevant events, refresh the data
-       // Ideally we would append the new message/memory directly, but for now we re-fetch to ensure consistency
-       fetchData();
+       // H-18: Use debounced fetch to prevent cascading API calls
+       debouncedFetchData();
     }
   });
 

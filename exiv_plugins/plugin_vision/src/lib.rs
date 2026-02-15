@@ -30,33 +30,29 @@ impl Plugin for VisionPlugin {
     }
 
     async fn on_event(&self, event: &ExivEvent) -> anyhow::Result<Option<ExivEventData>> {
-        if let ExivEventData::ActionRequested { requester: _, action } = &event.data {
-            if let HandAction::CaptureScreen = action {
-                tracing::info!("📷 Vision Plugin: Capturing screen...");
-                
-                // ここで実際にスクリーンショットを撮る
-                // let buffer = screenshots::Screen::all()?[0].capture()?;
-                
-                // Mock response
-                let vision_data = ColorVisionData {
-                    captured_at: Utc::now(),
-                    detected_elements: vec![
-                        DetectedElement {
-                            label: "Submit Button".to_string(),
-                            bounds: (100, 200, 50, 20),
-                            confidence: 0.99,
-                            attributes: std::collections::HashMap::new(),
-                        }
-                    ],
-                    image_ref: Some("memory://mock-image-id".to_string()),
-                };
+        if let ExivEventData::ActionRequested { requester: _, action: HandAction::CaptureScreen } = &event.data {
+            // L-07: This is mock data - real implementation requires platform-specific screen capture
+            tracing::warn!("📷 Vision Plugin: Returning MOCK screen capture data (not yet implemented)");
 
-                return Ok(Some(ExivEvent::with_trace(
-                    event.trace_id,
-                    ExivEventData::VisionUpdated(vision_data)
-                ).data));
-            }
+            let vision_data = ColorVisionData {
+                captured_at: Utc::now(),
+                detected_elements: vec![
+                    DetectedElement {
+                        label: "Submit Button".to_string(),
+                        bounds: (100, 200, 50, 20),
+                        confidence: 0.99,
+                        attributes: std::collections::HashMap::new(),
+                    }
+                ],
+                image_ref: Some("memory://mock-image-id".to_string()),
+            };
+
+            return Ok(Some(ExivEvent::with_trace(
+                event.trace_id,
+                ExivEventData::VisionUpdated(vision_data)
+            ).data));
         }
+
         Ok(None)
     }
 }

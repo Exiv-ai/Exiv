@@ -13,9 +13,11 @@ pub struct EventProcessor {
     history: Arc<tokio::sync::RwLock<VecDeque<Arc<ExivEvent>>>>,
     metrics: Arc<crate::managers::SystemMetrics>,
     max_history_size: usize,
+    event_retention_hours: u64, // M-10: Configurable retention period
 }
 
 impl EventProcessor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         registry: Arc<PluginRegistry>,
         plugin_manager: Arc<PluginManager>,
@@ -24,6 +26,7 @@ impl EventProcessor {
         history: Arc<tokio::sync::RwLock<VecDeque<Arc<ExivEvent>>>>,
         metrics: Arc<crate::managers::SystemMetrics>,
         max_history_size: usize,
+        event_retention_hours: u64, // M-10: Configurable retention period
     ) -> Self {
         let (refresh_tx, mut refresh_rx) = mpsc::channel(1);
         let registry_clone = registry.clone();
@@ -31,11 +34,11 @@ impl EventProcessor {
 
         // 🔄 デバウンスされたルート更新タスク
         tokio::spawn(async move {
-            while let Some(_) = refresh_rx.recv().await {
+            while (refresh_rx.recv().await).is_some() {
                 // 連続した要求を待機してまとめる (デバウンス)
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 // チャンネルに溜まった残りのメッセージを空にする
-                while let Ok(_) = refresh_rx.try_recv() {}
+                while refresh_rx.try_recv().is_ok() {}
 
                 info!("🔄 Refreshing dynamic routes (debounced)...");
                 let mut dynamic_routes = axum::Router::new();
@@ -61,6 +64,7 @@ impl EventProcessor {
             history,
             metrics,
             max_history_size,
+            event_retention_hours,
         }
     }
 
@@ -71,7 +75,8 @@ impl EventProcessor {
     async fn record_event(&self, event: Arc<ExivEvent>) {
         let mut history = self.history.write().await;
         history.push_back(event);
-        if history.len() > self.max_history_size {
+        // H-06: Use while loop to handle bursts that exceed capacity
+        while history.len() > self.max_history_size {
             history.pop_front();
         }
     }
@@ -87,7 +92,8 @@ impl EventProcessor {
     }
 
     pub async fn cleanup_old_events(&self) {
-        let cutoff = chrono::Utc::now() - chrono::Duration::hours(24); // 24 hours ago
+        // M-10: Use configurable retention period instead of hardcoded 24h
+        let cutoff = chrono::Utc::now() - chrono::Duration::hours(self.event_retention_hours as i64);
         let mut history = self.history.write().await;
 
         // Remove old events
@@ -117,11 +123,8 @@ impl EventProcessor {
             self.record_event(event.clone()).await;
 
             // Increment metrics based on event type
-            match &event.data {
-                exiv_shared::ExivEventData::MessageReceived(_) => {
-                    self.metrics.total_requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                _ => {}
+            if let exiv_shared::ExivEventData::MessageReceived(_) = &event.data {
+                self.metrics.total_requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
 
             // 1. 全プラグイン（および内部システムハンドラ）に配信

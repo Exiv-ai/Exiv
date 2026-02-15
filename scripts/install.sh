@@ -61,6 +61,12 @@ if [[ "$VERSION" == "latest" ]]; then
         || error "Failed to fetch latest release. Set EXIV_VERSION explicitly."
 fi
 VERSION_NUM="${VERSION#v}"
+
+# Validate version format (semver)
+if ! [[ "$VERSION_NUM" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+    error "Invalid version format: '$VERSION_NUM'. Expected semver (e.g., 1.2.3)"
+fi
+
 echo "  Version:  v${VERSION_NUM}"
 
 # --- Download ---
@@ -108,12 +114,13 @@ chmod +x "${EXTRACTED_DIR}/exiv_system"
 echo ""
 echo -e "${CYAN}Installing to ${INSTALL_DIR}...${NC}"
 
-INSTALL_ARGS="install --prefix ${INSTALL_DIR}"
-[[ "$SETUP_SERVICE" == "true" ]] && INSTALL_ARGS="${INSTALL_ARGS} --service"
+# M-20: Use array to prevent word-splitting issues with paths containing spaces
+INSTALL_ARGS=(install --prefix "${INSTALL_DIR}")
+[[ "$SETUP_SERVICE" == "true" ]] && INSTALL_ARGS+=("--service")
 
 # The binary's install command handles: file placement, .env generation,
 # Python setup, and optional systemd service registration.
-sudo "${EXTRACTED_DIR}/exiv_system" ${INSTALL_ARGS}
+sudo "${EXTRACTED_DIR}/exiv_system" "${INSTALL_ARGS[@]}"
 
 echo ""
 echo -e "${GREEN}Exiv v${VERSION_NUM} installed successfully.${NC}"

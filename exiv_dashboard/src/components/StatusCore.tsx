@@ -162,7 +162,7 @@ export const StatusCore = memo(function StatusCore({ isWindowMode = false }: { i
   }, [seekTime]);
 
   const handleSeekChange = (e: any) => {
-    const val = parseInt(e.target.value);
+    const val = parseInt(e.target.value) || 0;
     
     // Snap logic: Find closest event within +/- 5 seconds window
     const closestEvent = eventHistory.find(ev => Math.abs(ev.timestamp - val) < 5000);
@@ -267,7 +267,7 @@ export const StatusCore = memo(function StatusCore({ isWindowMode = false }: { i
             min={startTime}
             max={endTime}
             value={currentEffectiveTime}
-            onInput={(e) => setSeekTime(parseInt((e.target as HTMLInputElement).value))}
+            onInput={(e) => setSeekTime(parseInt((e.target as HTMLInputElement).value) || 0)}
             onMouseUp={handleSeekChange}
             onTouchEnd={handleSeekChange}
             className="w-48 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#2e4de6] relative z-10"

@@ -22,9 +22,13 @@ pub struct ModeratorPlugin {
 }
 
 enum SessionState {
-    Collecting(Vec<Proposal>),
-    Synthesizing,
+    Collecting { proposals: Vec<Proposal>, created_at: std::time::Instant },
+    Synthesizing { created_at: std::time::Instant },
 }
+
+const SESSION_TIMEOUT_SECS: u64 = 60;
+// M-16: Named constant to prevent type confusion with string matching
+const SYSTEM_CONSENSUS_AGENT: &str = "system.consensus";
 
 struct Proposal {
     #[allow(dead_code)]
@@ -34,9 +38,39 @@ struct Proposal {
 
 impl ModeratorPlugin {
     pub async fn new_plugin(_config: PluginConfig) -> anyhow::Result<Self> {
-        Ok(Self {
+        let plugin = Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-        })
+        };
+        // C-05: Spawn cleanup task for stale sessions
+        plugin.spawn_cleanup_task();
+        Ok(plugin)
+    }
+
+    fn spawn_cleanup_task(&self) {
+        let sessions = self.sessions.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+                let mut map = sessions.write().await;
+                let before = map.len();
+                map.retain(|trace_id, state| {
+                    let created_at = match state {
+                        SessionState::Collecting { created_at, .. } => *created_at,
+                        SessionState::Synthesizing { created_at } => *created_at,
+                    };
+                    if created_at.elapsed().as_secs() > SESSION_TIMEOUT_SECS {
+                        tracing::warn!(trace_id = %trace_id, "🕐 Consensus session timed out, removing");
+                        false
+                    } else {
+                        true
+                    }
+                });
+                let removed = before - map.len();
+                if removed > 0 {
+                    tracing::info!("🧹 Cleaned up {} stale consensus sessions", removed);
+                }
+            }
+        });
     }
 }
 
@@ -62,7 +96,10 @@ impl Plugin for ModeratorPlugin {
                 // セッションの初期化 (Collecting Phase)
                 {
                     let mut sessions = self.sessions.write().await;
-                    sessions.insert(event.trace_id, SessionState::Collecting(Vec::new()));
+                    sessions.insert(event.trace_id, SessionState::Collecting {
+                        proposals: Vec::new(),
+                        created_at: std::time::Instant::now(),
+                    });
                 }
                 
                 return Ok(None);
@@ -70,7 +107,7 @@ impl Plugin for ModeratorPlugin {
 
             ExivEventData::ThoughtResponse { agent_id, engine_id: _, content, source_message_id: _ } => {
                 // 自分自身(Moderator)や、統合エンジン(Synthesizer)からの回答を区別する必要がある
-                if agent_id == "system.consensus" {
+                if agent_id == SYSTEM_CONSENSUS_AGENT {
                     return Ok(None);
                 }
 
@@ -82,7 +119,7 @@ impl Plugin for ModeratorPlugin {
 
                 if let Some(state) = sessions.get_mut(&event.trace_id) {
                     match state {
-                        SessionState::Collecting(proposals) => {
+                        SessionState::Collecting { proposals, created_at } => {
                             // 1. 提案の収集
                             proposals.push(Proposal {
                                 engine_id: agent_id.clone(),
@@ -96,9 +133,9 @@ impl Plugin for ModeratorPlugin {
                                 let combined_views = proposals.iter().enumerate()
                                     .map(|(i, p)| format!("## Opinion {}:\n{}", i + 1, p.content))
                                     .collect::<Vec<_>>().join("\n\n");
-                                
+
                                 // 2. 統合フェーズへ移行
-                                *state = SessionState::Synthesizing;
+                                *state = SessionState::Synthesizing { created_at: *created_at };
                                 start_synthesis = true;
                                     
                                 synthesis_prompt = format!(
@@ -107,17 +144,18 @@ impl Plugin for ModeratorPlugin {
                                 );
                             }
                         }
-                        SessionState::Synthesizing => {
+                        SessionState::Synthesizing { .. } => {
                             // 3. 統合回答の受信 (Final Phase)
                             tracing::info!(trace_id = %event.trace_id, "🏁 Synthesis complete via {}", agent_id);
-                            
-                            // セッション終了
+
+                            // セッション終了 — ロックを解放してから返却
                             sessions.remove(&event.trace_id);
-                            
+                            drop(sessions);
+
                             return Ok(Some(ExivEvent::with_trace(
                                 event.trace_id,
                                 ExivEventData::ThoughtResponse {
-                                    agent_id: "system.consensus".to_string(),
+                                    agent_id: SYSTEM_CONSENSUS_AGENT.to_string(),
                                     engine_id: "core.moderator".to_string(),
                                     content: content.clone(),
                                     source_message_id: "consensus".to_string(),

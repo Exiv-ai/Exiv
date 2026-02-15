@@ -105,26 +105,41 @@ impl Plugin for McpAdapterPlugin {
             // Connect to all configured servers
             for (name, instance) in state.servers.iter_mut() {
                 info!("   - Connecting to [MCP] {}: {} {:?}", name, instance.command, instance.args);
-                match McpClient::connect(&instance.command, &instance.args).await {
-                    Ok(client) => {
-                        info!("   ✅ Connected to [MCP] {}", name);
-                        
-                        // List tools to verify connection and register (log for now)
-                        match client.list_tools().await {
-                            Ok(tools) => {
-                                info!("      🛠️ Found {} tools on {}", tools.tools.len(), name);
-                                for tool in tools.tools {
-                                    info!("         - {}: {}", tool.name, tool.description.unwrap_or_default());
-                                }
-                            }
-                            Err(e) => error!("      ❌ Failed to list tools: {}", e),
-                        }
 
-                        instance.client = Some(Arc::new(client));
+                // H-12: Retry with exponential backoff (3 attempts)
+                let mut connected = false;
+                for attempt in 1..=3u32 {
+                    match McpClient::connect(&instance.command, &instance.args).await {
+                        Ok(client) => {
+                            info!("   ✅ Connected to [MCP] {}", name);
+
+                            match client.list_tools().await {
+                                Ok(tools) => {
+                                    info!("      🛠️ Found {} tools on {}", tools.tools.len(), name);
+                                    for tool in tools.tools {
+                                        info!("         - {}: {}", tool.name, tool.description.unwrap_or_default());
+                                    }
+                                }
+                                Err(e) => error!("      ❌ Failed to list tools: {}", e),
+                            }
+
+                            instance.client = Some(Arc::new(client));
+                            connected = true;
+                            break;
+                        }
+                        Err(e) => {
+                            if attempt < 3 {
+                                let delay = std::time::Duration::from_secs(1 << (attempt - 1));
+                                error!("   ⚠️ Connection attempt {}/3 failed for [MCP] {}: {}. Retrying in {:?}...", attempt, name, e, delay);
+                                tokio::time::sleep(delay).await;
+                            } else {
+                                error!("   ❌ Failed to connect to [MCP] {} after 3 attempts: {}", name, e);
+                            }
+                        }
                     }
-                    Err(e) => {
-                        error!("   ❌ Failed to connect to [MCP] {}: {}", name, e);
-                    }
+                }
+                if !connected {
+                    error!("   ⚠️ MCP Server '{}' is unavailable. Tool calls will fail.", name);
                 }
             }
         } else {

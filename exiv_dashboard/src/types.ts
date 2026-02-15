@@ -91,3 +91,41 @@ export interface GazeData {
 
 export type TrackerStatus = 'loading' | 'requesting' | 'active' | 'denied' | 'error' | 'stopped';
 export type DelegateMode = 'gpu' | 'cpu' | 'cpu-fallback';
+
+// Event types for SSE stream and history
+export interface StrictSystemEvent {
+  type: string;
+  timestamp: number;
+  payload?: Record<string, unknown>;
+  data?: unknown;
+}
+
+// Neural network visualization types
+export interface Node {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  type: string;
+  color: string;
+  data: { status: string; lastActive: string; log: string };
+}
+
+export interface Edge {
+  source: string;
+  target: string;
+  color: string;
+}
+
+export interface Pulse {
+  edge: Edge;
+  progress: number;
+  speed: number;
+  color: string;
+}
+
+export interface ModalState {
+  node: Node | null;
+}

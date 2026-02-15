@@ -34,6 +34,11 @@ if ($Version -eq "latest") {
     }
 }
 $VersionNum = $Version -replace "^v", ""
+# M-21: Validate version format (semver)
+if ($VersionNum -notmatch '^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$') {
+    Write-Host "Error: Invalid version format '$VersionNum'. Expected semver (e.g., 1.2.3 or 1.2.3-beta.1)" -ForegroundColor Red
+    exit 1
+}
 Write-Host "  Version:  v$VersionNum"
 
 # --- Download ---

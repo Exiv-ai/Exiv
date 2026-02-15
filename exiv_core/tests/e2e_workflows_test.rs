@@ -249,7 +249,7 @@ async fn test_agent_creation_with_memory_context() {
 
     // Get the created agent (there may be default agents from init_db)
     let agents = state.agent_manager.list_agents().await.unwrap();
-    assert!(agents.len() >= 1, "Expected at least 1 agent");
+    assert!(!agents.is_empty(), "Expected at least 1 agent");
 
     // Find our test agent
     let agent = agents.iter()

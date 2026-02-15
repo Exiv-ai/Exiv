@@ -73,6 +73,20 @@ exiv_system uninstall           # remove installation
 
 The dashboard is served at http://localhost:8081.
 
+### Updating
+
+**CLI** (recommended — works even when the service is stopped):
+
+```bash
+exiv_system update              # check and apply latest version
+exiv_system update --check      # check only, don't apply
+exiv_system update --version 0.2.0  # install a specific version
+```
+
+**Dashboard**: Open the SYSTEM panel and click "Check for Updates".
+
+**Reinstall**: Running the install script again will download and install the latest version.
+
 ## Project Structure
 
 ```

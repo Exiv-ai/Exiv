@@ -28,6 +28,7 @@ async fn create_test_processor(max_history_size: usize) -> (Arc<EventProcessor>,
         event_history.clone(),
         metrics,
         max_history_size,
+        24, // event_retention_hours
     ));
 
     (processor, event_history)

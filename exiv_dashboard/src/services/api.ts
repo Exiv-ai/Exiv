@@ -98,5 +98,48 @@ export const api = {
       body: JSON.stringify({ approved_by: approvedBy })
     });
     if (!res.ok) throw new Error(`Failed to deny permission: ${res.statusText}`);
+  },
+
+  async checkForUpdate(): Promise<UpdateInfo> {
+    const res = await fetch(`${API_BASE}/system/update/check`);
+    if (!res.ok) throw new Error(`Failed to check for updates: ${res.statusText}`);
+    return res.json();
+  },
+
+  async applyUpdate(version: string): Promise<UpdateResult> {
+    const res = await fetch(`${API_BASE}/system/update/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version })
+    });
+    if (!res.ok) throw new Error(`Failed to apply update: ${res.statusText}`);
+    return res.json();
+  },
+
+  async getVersion(): Promise<{ version: string; build_target: string }> {
+    const res = await fetch(`${API_BASE}/system/version`);
+    if (!res.ok) throw new Error(`Failed to fetch version: ${res.statusText}`);
+    return res.json();
   }
 };
+
+export interface UpdateInfo {
+  current_version: string;
+  latest_version?: string;
+  update_available: boolean;
+  release_url?: string;
+  release_name?: string;
+  release_notes?: string;
+  published_at?: string;
+  build_target?: string;
+  message?: string;
+  assets?: { name: string; size: number; download_url: string }[];
+}
+
+export interface UpdateResult {
+  status: string;
+  previous_version: string;
+  new_version: string;
+  sha256: string;
+  message: string;
+}

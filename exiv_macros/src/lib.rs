@@ -17,6 +17,7 @@ struct PluginAttr {
     permissions: Vec<String>,
     capabilities: Vec<String>,
     tags: Vec<String>,
+    tools: Vec<String>, // M-12: provided_tools support
 }
 
 impl Parse for PluginAttr {
@@ -32,6 +33,7 @@ impl Parse for PluginAttr {
         let mut permissions = Vec::new();
         let mut capabilities = Vec::new();
         let mut tags = Vec::new();
+        let mut tools = Vec::new();
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -64,6 +66,7 @@ impl Parse for PluginAttr {
                     "capabilities" => capabilities = vals,
                     "config_keys" => config_keys = vals,
                     "tags" => tags = vals,
+                    "tools" => tools = vals, // M-12
                     _ => {}
                 }
             }
@@ -73,7 +76,7 @@ impl Parse for PluginAttr {
             }
         }
 
-        Ok(PluginAttr { name, category, service_type, description, version, icon, action_icon, config_keys, permissions, capabilities, tags })
+        Ok(PluginAttr { name, category, service_type, description, version, icon, action_icon, config_keys, permissions, capabilities, tags, tools })
     }
 }
 
@@ -115,6 +118,8 @@ fn emit_plugin_code(input: DeriveInput, attr: PluginAttr) -> syn::Result<proc_ma
         None => quote! { None },
     };
     let config_keys_tokens = attr.config_keys.iter().map(|k| quote! { #k.to_string() });
+    // M-12: Generate provided_tools tokens
+    let tools_tokens = attr.tools.iter().map(|t| quote! { #t.to_string() });
 
     // Icon embedding process
     // Optimization: EXIV_SKIP_ICON_EMBED=1 skips icon embedding (faster development builds)
@@ -171,6 +176,7 @@ fn emit_plugin_code(input: DeriveInput, attr: PluginAttr) -> syn::Result<proc_ma
         "Reasoning" => vec!["#MIND", "#LLM"],
         "Memory" => vec!["#MEMORY"],
         "Skill" | "Action" => vec!["#TOOL"],
+        "Vision" => vec!["#VISION", "#SENSOR"],
         "HAL" => vec!["#HAL"],
         "Communication" => vec!["#ADAPTER"],
         _ => vec![],
@@ -196,11 +202,11 @@ fn emit_plugin_code(input: DeriveInput, attr: PluginAttr) -> syn::Result<proc_ma
     }
 
     let category_ident = if attr.category.is_empty() {
-        // Inference logic
+        // L-04: Inference logic with complete coverage
         match attr.service_type.as_str() {
             "Reasoning" => quote! { exiv_shared::PluginCategory::Agent },
             "Memory" => quote! { exiv_shared::PluginCategory::Memory },
-            "Tool" | "HAL" | "Communication" => quote! { exiv_shared::PluginCategory::Tool },
+            "Tool" | "HAL" | "Communication" | "Vision" | "Skill" | "Action" => quote! { exiv_shared::PluginCategory::Tool },
             _ => quote! { exiv_shared::PluginCategory::Other },
         }
     } else {
@@ -233,11 +239,13 @@ fn emit_plugin_code(input: DeriveInput, attr: PluginAttr) -> syn::Result<proc_ma
                     action_icon: #action_icon_token,
                     action_target: None,
                     icon_data: #icon_data_tokens,
-                    magic_seal: 0x45584956, // EXIV
-                    sdk_version: env!("CARGO_PKG_VERSION").to_string(),
+                    magic_seal: 0x56455253, // VERS - must match kernel validation
+                    // M-14: Use exiv_shared::SDK_VERSION for consistent version reporting
+                    sdk_version: exiv_shared::SDK_VERSION.to_string(),
                     required_permissions: vec![ #(#perms),* ],
                     provided_capabilities: vec![ #(#caps),* ],
-                    provided_tools: vec![],
+                    // M-12: Support tools attribute from macro
+                    provided_tools: vec![ #(#tools_tokens),* ],
                 }
             }
         }

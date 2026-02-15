@@ -18,20 +18,30 @@ export function SecurityGuard() {
   const [grantedIds, setGrantedIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // Poll for pending permission requests
+  // M-23: Poll for pending permission requests with AbortController
   useEffect(() => {
+    let abortController: AbortController | null = null;
+
     const fetchPending = async () => {
+      abortController?.abort();
+      abortController = new AbortController();
       try {
         const pending = await api.getPendingPermissions();
-        setRequests(pending);
+        if (!abortController.signal.aborted) {
+          setRequests(pending);
+        }
       } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         console.error("Failed to fetch pending permissions:", err);
       }
     };
 
     fetchPending();
-    const interval = setInterval(fetchPending, 3000); // Poll every 3 seconds
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchPending, 3000);
+    return () => {
+      clearInterval(interval);
+      abortController?.abort();
+    };
   }, []);
 
   const handleGrant = async (req: PermissionRequest) => {

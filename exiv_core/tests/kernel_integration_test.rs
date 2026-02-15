@@ -57,8 +57,7 @@ async fn test_dynamic_routing_registration() {
 #[tokio::test]
 async fn test_permission_logic_unit() {
     let permission = exiv_shared::Permission::InputControl;
-    let mut permissions = Vec::new();
-    permissions.push(permission.clone());
+    let permissions = [permission];
 
     assert!(permissions.contains(&exiv_shared::Permission::InputControl));
 }

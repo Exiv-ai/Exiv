@@ -19,10 +19,10 @@ jobs:
     name: Build Dashboard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: npm
@@ -37,11 +37,11 @@ jobs:
         working-directory: exiv_dashboard
 
       - name: Upload dashboard artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dashboard-dist
           path: exiv_dashboard/dist/
-          retention-days: 1
+          retention-days: 7
 
   build:
     name: Build (${{ matrix.platform }})
@@ -87,10 +87,10 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4
 
       - name: Download dashboard artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dashboard-dist
           path: exiv_dashboard/dist/
@@ -101,7 +101,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
         with:
           shared-key: release-${{ matrix.target }}
 
@@ -167,6 +167,12 @@ jobs:
 
           tar czf "${STAGING}.tar.gz" "${STAGING}"
 
+          # L-13: Verify archive was created successfully
+          if [[ ! -f "${STAGING}.tar.gz" ]]; then
+            echo "::error::Failed to create archive ${STAGING}.tar.gz"
+            exit 1
+          fi
+
           # Bare binary for self-update mechanism (update.rs expects this name)
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
             "exiv_system-${{ matrix.target }}"
@@ -217,21 +223,21 @@ jobs:
           $SHA_CMD "exiv_system-${TARGET}" > "exiv_system-${TARGET}.sha256"
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-${{ matrix.platform }}
           path: |
             exiv-${{ steps.version.outputs.version }}-${{ matrix.platform }}.*
             exiv_system-${{ matrix.target }}
             exiv_system-${{ matrix.target }}.sha256
-          retention-days: 1
+          retention-days: 7
 
   release:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4
 
       - name: Determine version
         id: version
@@ -245,7 +251,7 @@ jobs:
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts/
 
@@ -261,11 +267,16 @@ jobs:
       - name: Create tag (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'
         run: |
+          # M-26: Check for existing tag before creating
+          if git ls-remote --tags origin | grep -q "refs/tags/v${{ steps.version.outputs.version }}$"; then
+            echo "::error::Tag v${{ steps.version.outputs.version }} already exists on remote"
+            exit 1
+          fi
           git tag "v${{ steps.version.outputs.version }}"
           git push origin "v${{ steps.version.outputs.version }}"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: "Exiv v${{ steps.version.outputs.version }}"

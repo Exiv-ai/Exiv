@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { Suspense, lazy } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Activity, Database, MessageSquare, Puzzle, Settings, Cpu, Brain, Zap, Shield, Eye, Power, Play, Pause, LucideIcon } from 'lucide-react';
+import { Activity, Database, MessageSquare, Puzzle, Settings, Cpu, Brain, Zap, Shield, Eye, Power, Play, Pause, RefreshCw, LucideIcon } from 'lucide-react';
 import { InteractiveGrid } from '../components/InteractiveGrid';
 import { GlassWindow } from '../components/GlassWindow';
 import { CustomCursor } from '../components/CustomCursor';
@@ -13,13 +13,14 @@ import { useEventStream } from '../hooks/useEventStream';
 import { GazeTracker } from '../components/GazeTracker';
 
 import { api } from '../services/api';
+import { SystemUpdate } from '../components/SystemUpdate';
 
 const StatusCore = lazy(() => import('../components/StatusCore').then(m => ({ default: m.StatusCore })));
 const MemoryCore = lazy(() => import('../components/MemoryCore').then(m => ({ default: m.MemoryCore })));
 const ExivWorkspace = lazy(() => import('../components/AgentWorkspace').then(m => ({ default: m.AgentWorkspace })));
 const ExivPluginManager = lazy(() => import('../components/ExivPluginManager').then(m => ({ default: m.ExivPluginManager })));
 
-function SystemLogView() {
+function SystemView() {
   const [logs, setLogs] = useState<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -34,18 +35,30 @@ function SystemLogView() {
   }, [logs]);
 
   return (
-    <div className="flex-1 flex flex-col p-6 font-mono text-[10px] bg-slate-900/90 text-blue-400 overflow-hidden">
-      <div className="flex items-center gap-2 mb-4 border-b border-blue-900/50 pb-2">
-        <Cpu size={14} />
-        <span className="font-black tracking-widest">KERNEL_LIVE_LOG v0.3.3</span>
+    <div className="flex-1 flex flex-col bg-slate-900/90 text-blue-400 overflow-hidden">
+      {/* Update Section */}
+      <div className="border-b border-blue-900/50">
+        <div className="flex items-center gap-2 px-4 pt-4 pb-2">
+          <RefreshCw size={14} />
+          <span className="text-[10px] font-black tracking-widest font-mono">SYSTEM_UPDATE</span>
+        </div>
+        <SystemUpdate />
       </div>
-      <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-1 no-scrollbar">
-        {logs.length === 0 && <div className="opacity-30">AWAITING_SIGNAL...</div>}
-        {logs.map((log, i) => (
-          <div key={i} className="animate-in fade-in slide-in-from-left-1 duration-300">
-            <span className="opacity-50 mr-2">&gt;</span>{log}
-          </div>
-        ))}
+
+      {/* Live Log Section */}
+      <div className="flex-1 flex flex-col p-6 font-mono text-[10px] overflow-hidden">
+        <div className="flex items-center gap-2 mb-4 border-b border-blue-900/50 pb-2">
+          <Cpu size={14} />
+          <span className="font-black tracking-widest">KERNEL_LIVE_LOG</span>
+        </div>
+        <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-1 no-scrollbar">
+          {logs.length === 0 && <div className="opacity-30">AWAITING_SIGNAL...</div>}
+          {logs.map((log, i) => (
+            <div key={i} className="animate-in fade-in slide-in-from-left-1 duration-300">
+              <span className="opacity-50 mr-2">&gt;</span>{log}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -127,6 +140,7 @@ export function Home() {
     'Power': Power,
     'Play': Play,
     'Pause': Pause,
+    'RefreshCw': RefreshCw,
   };
 
   const menuItems = useMemo(() => {
@@ -189,7 +203,7 @@ export function Home() {
               <Suspense fallback={<div className="flex items-center justify-center h-full text-xs font-mono text-slate-400">SYNCHRONIZING...</div>}>
                 {activeMainView === 'sandbox' && <ExivWorkspace />}
                 {activeMainView === 'plugin' && <ExivPluginManager />}
-                {activeMainView === 'system' && <SystemLogView />}
+                {activeMainView === 'system' && <SystemView />}
               </Suspense>
             </div>
           </div>
@@ -216,7 +230,7 @@ export function Home() {
                 {win.type === 'memory' && <MemoryCore isWindowMode={true} onClose={() => closeWindow(win.id)} />}
                 {win.type === 'sandbox' && <ExivWorkspace />}
                 {win.type === 'plugin' && <ExivPluginManager />}
-                {win.type === 'system' && <SystemLogView />}
+                {win.type === 'system' && <SystemView />}
               </Suspense>
             </GlassWindow>
           </div>

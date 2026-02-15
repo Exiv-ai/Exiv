@@ -18,7 +18,8 @@ pub type IpLimiter = GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
 /// IP-based rate limiter using token bucket algorithm (via governor)
 pub struct RateLimiter {
-    limiters: DashMap<IpAddr, Arc<IpLimiter>>,
+    // M-04: Store last-seen timestamp alongside limiter for side-effect-free cleanup
+    limiters: DashMap<IpAddr, (Arc<IpLimiter>, std::time::Instant)>,
     quota: Quota,
 }
 
@@ -27,8 +28,11 @@ impl RateLimiter {
     /// - `per_second`: token replenish rate per second
     /// - `burst`: maximum burst capacity
     pub fn new(per_second: u32, burst: u32) -> Self {
-        let quota = Quota::per_second(NonZeroU32::new(per_second).unwrap())
-            .allow_burst(NonZeroU32::new(burst).unwrap());
+        // M-03: Prevent panic on zero values by falling back to 1
+        let per_second = NonZeroU32::new(per_second).unwrap_or(NonZeroU32::MIN);
+        let burst = NonZeroU32::new(burst).unwrap_or(NonZeroU32::MIN);
+        let quota = Quota::per_second(per_second)
+            .allow_burst(burst);
 
         Self {
             limiters: DashMap::new(),
@@ -39,19 +43,21 @@ impl RateLimiter {
     /// Check if the given IP is allowed to proceed.
     /// Returns `true` if allowed, `false` if rate-limited.
     pub fn check(&self, ip: IpAddr) -> bool {
-        let limiter = self
+        let mut entry = self
             .limiters
             .entry(ip)
-            .or_insert_with(|| Arc::new(GovernorRateLimiter::direct(self.quota)));
-        limiter.check().is_ok()
+            .or_insert_with(|| (Arc::new(GovernorRateLimiter::direct(self.quota)), std::time::Instant::now()));
+        // M-04: Update last-seen timestamp on each check
+        entry.1 = std::time::Instant::now();
+        entry.0.check().is_ok()
     }
 
     /// Remove idle entries to prevent memory growth.
+    /// M-04: Uses timestamp-based staleness instead of consuming tokens
     pub fn cleanup(&self) {
-        // DashMap::retain walks all shards; call periodically (e.g., every 10 min)
-        self.limiters.retain(|_, limiter| {
-            // Keep entries that still have pending tokens (recently active)
-            limiter.check().is_err()
+        let idle_threshold = std::time::Duration::from_secs(600); // 10 minutes
+        self.limiters.retain(|_, (_, last_seen)| {
+            last_seen.elapsed() < idle_threshold
         });
     }
 

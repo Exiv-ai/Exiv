@@ -26,6 +26,7 @@ pub struct AppConfig {
     pub consensus_engines: Vec<String>,
     pub update_repo: String,
     pub event_history_size: usize,
+    pub event_retention_hours: u64,
 }
 
 impl AppConfig {
@@ -45,10 +46,19 @@ impl AppConfig {
             .parse::<u64>()
             .context("Failed to parse PLUGIN_EVENT_TIMEOUT_SECS")?;
 
+        // M-01: Value range validation
+        if plugin_event_timeout_secs == 0 || plugin_event_timeout_secs > 300 {
+            anyhow::bail!("PLUGIN_EVENT_TIMEOUT_SECS must be between 1 and 300 (got {})", plugin_event_timeout_secs);
+        }
+
         let max_event_depth = env::var("MAX_EVENT_DEPTH")
             .unwrap_or_else(|_| "10".to_string())
             .parse::<u8>()
             .context("Failed to parse MAX_EVENT_DEPTH")?;
+
+        if max_event_depth == 0 || max_event_depth > 50 {
+            anyhow::bail!("MAX_EVENT_DEPTH must be between 1 and 50 (got {})", max_event_depth);
+        }
 
         let memory_context_limit = env::var("MEMORY_CONTEXT_LIMIT")
             .unwrap_or_else(|_| "10".to_string())
@@ -60,13 +70,27 @@ impl AppConfig {
             .parse::<u16>()
             .context("Failed to parse PORT environment variable")?;
 
+        if port == 0 {
+            anyhow::bail!("PORT must be between 1 and 65535");
+        }
+
         let cors_origins_str = env::var("CORS_ORIGINS")
             .unwrap_or_else(|_| "http://localhost:5173,http://127.0.0.1:5173".to_string());
 
-        let cors_origins = cors_origins_str
+        // M-02: Skip invalid CORS origins with warning instead of failing entirely
+        let cors_origins: Vec<HeaderValue> = cors_origins_str
             .split(',')
-            .map(|s| s.parse().context("Invalid CORS origin URL"))
-            .collect::<anyhow::Result<Vec<HeaderValue>>>()?;
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                match trimmed.parse::<HeaderValue>() {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!("Skipping invalid CORS origin '{}': {}", trimmed, e);
+                        None
+                    }
+                }
+            })
+            .collect();
 
         let allowed_hosts_str = env::var("ALLOWED_HOSTS").unwrap_or_default();
         let allowed_hosts = if allowed_hosts_str.is_empty() {
@@ -91,6 +115,16 @@ impl AppConfig {
             .parse::<usize>()
             .context("Failed to parse EVENT_HISTORY_SIZE")?;
 
+        // M-10: Configurable event retention period (default 24 hours)
+        let event_retention_hours = env::var("EVENT_RETENTION_HOURS")
+            .unwrap_or_else(|_| "24".to_string())
+            .parse::<u64>()
+            .context("Failed to parse EVENT_RETENTION_HOURS")?;
+
+        if event_retention_hours == 0 || event_retention_hours > 720 {
+            anyhow::bail!("EVENT_RETENTION_HOURS must be between 1 and 720 (got {})", event_retention_hours);
+        }
+
         Ok(Self {
             database_url,
             port,
@@ -104,6 +138,7 @@ impl AppConfig {
             consensus_engines,
             update_repo,
             event_history_size,
+            event_retention_hours,
         })
     }
 }

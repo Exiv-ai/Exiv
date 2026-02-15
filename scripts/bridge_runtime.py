@@ -2,6 +2,7 @@ import sys
 import os
 import re
 import json
+import ast
 import importlib.util
 import traceback
 import threading
@@ -121,6 +122,53 @@ def main():
         print(f"ERROR: Script path '{script_path}' is outside allowed directory '{allowed_dir}'", file=sys.stderr)
         sys.exit(1)
 
+    # C-10: AST-based security inspection before execution
+    FORBIDDEN_MODULES = {'os', 'subprocess', 'shutil', 'ctypes', 'importlib', 'pathlib', 'socket'}
+
+    FORBIDDEN_BUILTINS = {'__import__', 'exec', 'eval', 'compile'}
+
+    def check_script_security(source_path):
+        """Inspect script AST for forbidden imports and dangerous builtins before execution."""
+        with open(source_path, 'r') as f:
+            source = f.read()
+        tree = ast.parse(source, filename=source_path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    top_module = alias.name.split('.')[0]
+                    if top_module in FORBIDDEN_MODULES:
+                        raise SecurityError(
+                            f"Forbidden import '{alias.name}' at line {node.lineno}. "
+                            f"Module '{top_module}' is not allowed in bridge scripts."
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    top_module = node.module.split('.')[0]
+                    if top_module in FORBIDDEN_MODULES:
+                        raise SecurityError(
+                            f"Forbidden import from '{node.module}' at line {node.lineno}. "
+                            f"Module '{top_module}' is not allowed in bridge scripts."
+                        )
+            elif isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name) and func.id in FORBIDDEN_BUILTINS:
+                    raise SecurityError(
+                        f"Forbidden builtin '{func.id}' at line {node.lineno}. "
+                        f"Dynamic code execution is not allowed in bridge scripts."
+                    )
+
+    class SecurityError(Exception):
+        pass
+
+    try:
+        check_script_security(script_path)
+    except SecurityError as e:
+        print(f"SECURITY ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+    except SyntaxError as e:
+        print(f"Syntax error in script: {e}", file=sys.stderr)
+        sys.exit(1)
+
     # Load user script
     try:
         spec = importlib.util.spec_from_file_location("user_logic", script_path)
@@ -140,20 +188,33 @@ def main():
         except Exception as e:
             print(f"Error during setup: {e}", file=sys.stderr)
 
-    # Allowed methods that can be called from the Rust side
-    ALLOWED_METHODS = {"think", "execute", "setup", "get_manifest"}
+    # C-11: Core allowed methods (hardcoded, not overridable)
+    CORE_METHODS = {"think", "execute", "setup", "get_manifest"}
+
+    # C-11: Discover on_action_* methods explicitly from user script at load time
+    REGISTERED_ACTIONS = set()
+    for attr_name in dir(user_logic):
+        if (attr_name.startswith("on_action_") and
+            re.match(r'^on_action_[a-z][a-z0-9_]*$', attr_name) and
+            callable(getattr(user_logic, attr_name, None))):
+            REGISTERED_ACTIONS.add(attr_name)
+
+    if REGISTERED_ACTIONS:
+        print(f"Registered action methods: {REGISTERED_ACTIONS}", file=sys.stderr)
+
+    ALLOWED_METHODS = CORE_METHODS | REGISTERED_ACTIONS
 
     # Simple JSON-RPC-like loop over stdin/stdout
     for line in sys.stdin:
         if not line.strip():
             continue
-        
+
         try:
             request = json.loads(line)
             method_name = request.get("method")
             params = request.get("params")
             request_id = request.get("id") # Keep original ID for correlation
-            
+
             response = {"id": request_id}
 
             # Built-in methods
@@ -166,10 +227,7 @@ def main():
                     "capabilities": ["Reasoning"]
                 })
                 response["result"] = manifest
-            elif method_name in ALLOWED_METHODS or (
-                method_name.startswith("on_action_") and
-                re.match(r'^on_action_[a-z][a-z0-9_]*$', method_name)
-            ):
+            elif method_name in ALLOWED_METHODS:
                 if not hasattr(user_logic, method_name):
                     response["error"] = f"Method '{method_name}' not found in user script"
                 else:
@@ -181,11 +239,13 @@ def main():
                     else:
                         response["error"] = result_dict["error"]
                         if "traceback" in result_dict:
-                            response["traceback"] = result_dict["traceback"]
+                            print(f"Method error traceback: {result_dict['traceback']}", file=sys.stderr)
             else:
-                response["error"] = f"Method '{method_name}' not found in user script"
+                response["error"] = f"Method '{method_name}' is not allowed"
         except Exception as e:
-            response = {"error": str(e), "traceback": traceback.format_exc()}
+            # L-09: Only include traceback in stderr, not in JSON response
+            print(f"Request handling error: {traceback.format_exc()}", file=sys.stderr)
+            response = {"error": str(e)}
         
         # Write response as a single line to the ORIGINAL stdout
         with stdout_lock:

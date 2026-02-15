@@ -40,13 +40,10 @@ struct GitHubAsset {
 }
 
 /// GET /api/system/update/check
-/// Checks GitHub Releases for a newer version (admin auth required).
+/// Checks GitHub Releases for a newer version (public, no auth required).
 pub async fn check_handler(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
 ) -> AppResult<Json<serde_json::Value>> {
-    check_auth(&state, &headers)?;
-
     let repo = &state.config.update_repo;
     let current_version = env!("CARGO_PKG_VERSION");
     let target = env!("TARGET");
@@ -87,6 +84,23 @@ pub async fn check_handler(
     let latest_version = release.tag_name.trim_start_matches('v');
     let update_available = latest_version != current_version;
 
+    // H-10: Detect version downgrade
+    let is_downgrade = {
+        let parse = |v: &str| -> Vec<u32> {
+            v.split('.').filter_map(|p| p.split('-').next().and_then(|n| n.parse().ok())).collect()
+        };
+        let cur = parse(current_version);
+        let tgt = parse(latest_version);
+        let mut downgrade = false;
+        for i in 0..cur.len().max(tgt.len()) {
+            let c = cur.get(i).copied().unwrap_or(0);
+            let t = tgt.get(i).copied().unwrap_or(0);
+            if t < c { downgrade = true; break; }
+            if t > c { break; }
+        }
+        downgrade
+    };
+
     // Find matching binary asset for this platform
     let expected_asset_name = format!("exiv_system-{}", target);
     let matching_assets: Vec<_> = release
@@ -106,6 +120,7 @@ pub async fn check_handler(
         "current_version": current_version,
         "latest_version": latest_version,
         "update_available": update_available,
+        "is_downgrade": is_downgrade,
         "release_url": release.html_url,
         "release_name": release.name,
         "release_notes": release.body,
@@ -141,6 +156,18 @@ pub async fn apply_handler(
         "📦 Update apply requested: {} → {} (repo: {})",
         current_version, requested_version, repo
     );
+
+    // Validate version format: only allow semver-like strings (alphanumeric, dots, hyphens, 'v' prefix)
+    {
+        let v = requested_version.strip_prefix('v').unwrap_or(requested_version);
+        let is_valid = !v.is_empty()
+            && v.len() <= 40
+            && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+            && v.contains('.');
+        if !is_valid {
+            return Err(AppError::Internal(anyhow::anyhow!("Invalid version format")));
+        }
+    }
 
     // 1. Fetch the specific release from GitHub
     let tag = if requested_version.starts_with('v') {
@@ -222,13 +249,16 @@ pub async fn apply_handler(
 
     // Parse checksum (format: "hash  filename" or just "hash")
     let expected_hash = expected_hash
+        .trim()
+        .lines()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Checksum file is empty: {}", sha256_asset_name))?
         .split_whitespace()
         .next()
-        .unwrap_or("")
-        .trim()
+        .ok_or_else(|| anyhow::anyhow!("No hash found in checksum file: {}", sha256_asset_name))?
         .to_lowercase();
 
-    if expected_hash.len() != 64 {
+    if expected_hash.len() != 64 || !expected_hash.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(AppError::Internal(anyhow::anyhow!(
             "Invalid SHA256 checksum format in {}",
             sha256_asset_name
@@ -261,10 +291,7 @@ pub async fn apply_handler(
             expected_hash, computed_hash
         );
         return Err(AppError::Internal(anyhow::anyhow!(
-            "SHA256 verification failed. Binary may be corrupted or tampered with. \
-             Expected: {}, Got: {}",
-            expected_hash,
-            computed_hash
+            "SHA256 verification failed. Binary may be corrupted or tampered with."
         )));
     }
 

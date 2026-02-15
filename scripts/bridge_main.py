@@ -15,7 +15,13 @@ def think(data):
     Python logic for Exiv Bridge.
     """
     try:
-        message_content = data.get("message", {}).get("content", "").lower()
+        # L-08: Input validation
+        if not isinstance(data, dict):
+            return "❌ Invalid input: expected dict"
+        message = data.get("message")
+        if not isinstance(message, dict):
+            return "❌ Invalid input: 'message' must be a dict"
+        message_content = message.get("content", "").lower()
         agent_name = data.get("agent", {}).get("name", "Unknown")
         
         if "fetch" in message_content:

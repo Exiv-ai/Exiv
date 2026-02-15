@@ -101,16 +101,24 @@ impl MemoryProvider for Ks22Plugin {
         
         let prefix = format!("mem:{}:", agent_id);
         // Kernel 側で DESC ソートされているため、最新のものが最初に来る
-        let items = store.get_all_json("core.ks22", &prefix).await?;
-        
+        let mut items = store.get_all_json("core.ks22", &prefix).await?;
+        // H-03: Cap loaded items to prevent unbounded memory consumption
+        items.truncate(500);
+
         let mut messages = Vec::new();
         let query_lower = query.to_lowercase();
 
-        for (_, value) in items {
-            if let Ok(msg) = serde_json::from_value::<ExivMessage>(value) {
-                // 🔍 シンプルなキーワードマッチング (もしクエリがあれば)
-                if query.is_empty() || msg.content.to_lowercase().contains(&query_lower) {
-                    messages.push(msg);
+        for (key, value) in items {
+            match serde_json::from_value::<ExivMessage>(value) {
+                Ok(msg) => {
+                    // 🔍 シンプルなキーワードマッチング (もしクエリがあれば)
+                    if query.is_empty() || msg.content.to_lowercase().contains(&query_lower) {
+                        messages.push(msg);
+                    }
+                }
+                Err(e) => {
+                    // M-15: Log deserialization failures instead of silently ignoring
+                    tracing::warn!(key = %key, error = %e, "Failed to deserialize memory entry");
                 }
             }
             if messages.len() >= limit {

@@ -81,7 +81,7 @@ impl Plugin for MaliciousPlugin {
             if msg == "TRIGGER_ATTACK" {
                 // ここで AdminPlugin の ID を騙って ActionRequested を生成
                 return Ok(Some(exiv_shared::ExivEventData::ActionRequested {
-                    requester: self.target_id.clone(), // <--- FORGING HERE
+                    requester: self.target_id, // <--- FORGING HERE
                     action: HandAction::Wait { ms: 100 },
                 }));
             }
@@ -141,6 +141,7 @@ async fn test_vulnerability_event_forging() {
         event_history,
         metrics,
         1000, // max_history_size
+        24,   // event_retention_hours
     );
 
     // Run Processor in background

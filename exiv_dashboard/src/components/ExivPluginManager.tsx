@@ -7,6 +7,8 @@ import { api } from '../services/api';
 function ConfigModal({ plugin, onClose }: { plugin: PluginManifest, onClose: () => void }) {
   const [config, setConfig] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  // H-19: Use React state instead of direct DOM manipulation for save button
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'error'>('idle');
 
   useEffect(() => {
     api.getPluginConfig(plugin.id)
@@ -57,30 +59,29 @@ function ConfigModal({ plugin, onClose }: { plugin: PluginManifest, onClose: () 
           <button onClick={onClose} className="px-6 py-2 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors tracking-wide">
             CANCEL
           </button>
-          <button 
+          <button
             onClick={async (e) => {
               e.preventDefault();
-              const btn = e.currentTarget;
-              btn.disabled = true;
-              btn.innerText = "SAVING...";
-              
+              // H-19: Use React state instead of direct DOM manipulation
+              setSaveState('saving');
+
               try {
                 // Save all keys in parallel with correct format { key, value }
                 await Promise.all(
-                  Object.entries(config).map(([key, value]) => 
+                  Object.entries(config).map(([key, value]) =>
                     api.updatePluginConfig(plugin.id, { key, value })
                   )
                 );
                 onClose();
               } catch (err) {
                 console.error("Failed to save config:", err);
-                btn.disabled = false;
-                btn.innerText = "SAVE ERROR (TRY AGAIN)";
+                setSaveState('error');
               }
-            }} 
+            }}
+            disabled={saveState === 'saving'}
             className="px-6 py-2 bg-[#2e4de6] text-white rounded-lg text-xs font-bold hover:bg-[#1e3bb3] transition-all shadow-md shadow-[#2e4de6]/20 tracking-wide disabled:opacity-50"
           >
-            SAVE & CLOSE
+            {saveState === 'saving' ? 'SAVING...' : saveState === 'error' ? 'SAVE ERROR (TRY AGAIN)' : 'SAVE & CLOSE'}
           </button>
         </div>
       </div>

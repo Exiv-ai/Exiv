@@ -6,7 +6,8 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion, Benchmark
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::collections::VecDeque;
-use exiv_shared::{ExivEvent, ExivEventData};
+#[allow(unused_imports)]
+use exiv_shared::ExivEvent;
 
 mod helpers;
 

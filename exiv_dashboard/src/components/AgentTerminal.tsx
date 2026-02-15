@@ -57,11 +57,15 @@ function AgentConsole({ agent, onBack }: { agent: AgentMetadata, onBack: () => v
     setIsTyping(true);
 
     try {
-      await fetch('/api/chat', {
+      // H-16: Check response status for errors
+      const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(userMsg)
       });
+      if (!res.ok) {
+        throw new Error(`Chat request failed: ${res.status}`);
+      }
     } catch (err) {
       console.error("Failed to send message:", err);
       setIsTyping(false);

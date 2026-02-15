@@ -45,8 +45,10 @@ impl PluginDataStore for SqliteDataStore {
     }
 
     async fn get_all_json(&self, plugin_id: &str, key_prefix: &str) -> anyhow::Result<Vec<(String, serde_json::Value)>> {
-        let pattern = format!("{}%", key_prefix);
-        let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM plugin_data WHERE plugin_id = ? AND key LIKE ? ORDER BY key DESC")
+        // Escape LIKE special characters to prevent pattern injection
+        let escaped_prefix = key_prefix.replace('%', "\\%").replace('_', "\\_");
+        let pattern = format!("{}%", escaped_prefix);
+        let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM plugin_data WHERE plugin_id = ? AND key LIKE ? ESCAPE '\\' ORDER BY key DESC")
             .bind(plugin_id)
             .bind(pattern)
             .fetch_all(&self.pool)
@@ -148,13 +150,29 @@ pub async fn write_audit_log(pool: &SqlitePool, entry: AuditLogEntry) -> anyhow:
     Ok(())
 }
 
-/// Spawn a background task to write an audit log entry (fire-and-forget).
-/// Logs errors but does not propagate them.
+/// Spawn a background task to write an audit log entry with retry.
+/// M-06: Retries up to 3 times with backoff instead of fire-and-forget.
 pub fn spawn_audit_log(pool: SqlitePool, entry: AuditLogEntry) {
     tokio::spawn(async move {
-        if let Err(e) = write_audit_log(&pool, entry).await {
-            tracing::error!("Failed to write audit log: {}", e);
+        for attempt in 0..3u32 {
+            match write_audit_log(&pool, entry.clone()).await {
+                Ok(()) => return,
+                Err(e) => {
+                    tracing::error!(
+                        attempt = attempt + 1,
+                        "Failed to write audit log: {}",
+                        e
+                    );
+                    if attempt < 2 {
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            100 * (attempt as u64 + 1),
+                        ))
+                        .await;
+                    }
+                }
+            }
         }
+        tracing::error!("Audit log entry permanently lost after 3 attempts");
     });
 }
 
@@ -163,6 +181,7 @@ pub async fn query_audit_logs(
     pool: &SqlitePool,
     limit: i64,
 ) -> anyhow::Result<Vec<AuditLogEntry>> {
+    #[allow(clippy::type_complexity)]
     let rows: Vec<(String, String, Option<String>, Option<String>, Option<String>, String, String, Option<String>, Option<String>)>
         = sqlx::query_as(
             "SELECT timestamp, event_type, actor_id, target_id, permission, result, reason, metadata, trace_id
@@ -240,6 +259,7 @@ pub async fn create_permission_request(
 pub async fn get_pending_permission_requests(
     pool: &SqlitePool,
 ) -> anyhow::Result<Vec<PermissionRequest>> {
+    #[allow(clippy::type_complexity)]
     let rows: Vec<(String, String, String, String, Option<String>, String, String, Option<String>, Option<String>, Option<String>, Option<String>)>
         = sqlx::query_as(
             "SELECT request_id, created_at, plugin_id, permission_type, target_resource, justification, status, approved_by, approved_at, expires_at, metadata
@@ -271,18 +291,27 @@ pub async fn get_pending_permission_requests(
 }
 
 /// Update permission request status (approve/deny)
+/// Only transitions from 'pending' status are allowed to prevent double-approval
 pub async fn update_permission_request(
     pool: &SqlitePool,
     request_id: &str,
     status: &str,
     approved_by: &str,
 ) -> anyhow::Result<()> {
+    // Whitelist allowed status transitions
+    if !["approved", "denied"].contains(&status) {
+        return Err(anyhow::anyhow!(
+            "Invalid status value: '{}'. Must be 'approved' or 'denied'",
+            status
+        ));
+    }
+
     let approved_at = Utc::now().to_rfc3339();
 
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE permission_requests
          SET status = ?, approved_by = ?, approved_at = ?
-         WHERE request_id = ?"
+         WHERE request_id = ? AND status = 'pending'"
     )
     .bind(status)
     .bind(approved_by)
@@ -290,6 +319,13 @@ pub async fn update_permission_request(
     .bind(request_id)
     .execute(pool)
     .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(anyhow::anyhow!(
+            "Permission request '{}' not found or already processed",
+            request_id
+        ));
+    }
 
     Ok(())
 }

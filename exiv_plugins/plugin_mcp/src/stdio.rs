@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, bail};
 use std::process::Stdio;
-use std::path::Path;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
@@ -16,15 +15,17 @@ const ALLOWED_COMMANDS: &[&str] = &[
     "bun",
 ];
 
-/// Validate command against whitelist and resolve to safe path
+/// Validate command against whitelist (bare command names only, no paths)
 fn validate_command(command: &str) -> Result<String> {
-    // Check if command is in whitelist
-    let cmd_name = Path::new(command)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(command);
+    // Reject any command containing path separators to prevent path-based bypass
+    if command.contains('/') || command.contains('\\') {
+        bail!(
+            "Command must not contain path separators: '{}'. Use bare command names only.",
+            command
+        );
+    }
 
-    if !ALLOWED_COMMANDS.contains(&cmd_name) {
+    if !ALLOWED_COMMANDS.contains(&command) {
         bail!(
             "Command '{}' not in whitelist. Allowed commands: {:?}",
             command,
@@ -32,8 +33,6 @@ fn validate_command(command: &str) -> Result<String> {
         );
     }
 
-    // For security, prefer full path resolution via 'which' or system PATH
-    // This prevents execution of malicious binaries in current directory
     Ok(command.to_string())
 }
 
@@ -144,9 +143,10 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_command_path_extraction() {
-        // Should extract command name from path
-        let result = validate_command("/usr/bin/node");
-        assert!(result.is_ok());
+    fn test_validate_command_rejects_paths() {
+        // Paths should be rejected to prevent whitelist bypass
+        assert!(validate_command("/usr/bin/node").is_err());
+        assert!(validate_command("../../../bin/node").is_err());
+        assert!(validate_command("C:\\Windows\\node").is_err());
     }
 }
