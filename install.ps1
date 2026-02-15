@@ -107,6 +107,68 @@ function Invoke-DownloadWithRetry {
     }
 }
 
+# --- PATH management ---
+function Add-ToSystemPath {
+    param([string]$Directory)
+    $CurrentPath = [System.Environment]::GetEnvironmentVariable("Path", [System.EnvironmentVariableTarget]::Machine)
+    if ($CurrentPath -split ";" | Where-Object { $_ -eq $Directory }) {
+        Write-Log "PATH already contains $Directory"
+        return
+    }
+    $NewPath = "$CurrentPath;$Directory"
+    [System.Environment]::SetEnvironmentVariable("Path", $NewPath, [System.EnvironmentVariableTarget]::Machine)
+    $env:Path = "$env:Path;$Directory"
+    Write-Step "  Added to system PATH: $Directory" -Color Green
+    Write-Log "Added to system PATH: $Directory"
+}
+
+# --- Registry (Add/Remove Programs) ---
+function Register-Uninstaller {
+    param(
+        [string]$InstallDir,
+        [string]$Version
+    )
+    $RegKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Exiv"
+    $UninstallScript = Join-Path $InstallDir "uninstall.ps1"
+
+    New-Item -Path $RegKey -Force | Out-Null
+    Set-ItemProperty -Path $RegKey -Name "DisplayName" -Value "Exiv"
+    Set-ItemProperty -Path $RegKey -Name "DisplayVersion" -Value $Version
+    Set-ItemProperty -Path $RegKey -Name "Publisher" -Value "Exiv Project"
+    Set-ItemProperty -Path $RegKey -Name "InstallLocation" -Value $InstallDir
+    Set-ItemProperty -Path $RegKey -Name "UninstallString" -Value "powershell.exe -ExecutionPolicy Bypass -File `"$UninstallScript`""
+    Set-ItemProperty -Path $RegKey -Name "DisplayIcon" -Value (Join-Path $InstallDir "exiv_system.exe")
+    Set-ItemProperty -Path $RegKey -Name "NoModify" -Value 1 -Type DWord
+    Set-ItemProperty -Path $RegKey -Name "NoRepair" -Value 1 -Type DWord
+    Set-ItemProperty -Path $RegKey -Name "InstallDate" -Value (Get-Date -Format "yyyyMMdd")
+    Write-Step "  Registered in Add/Remove Programs" -Color Green
+    Write-Log "Registry entry created: $RegKey"
+}
+
+# --- Rollback ---
+$Script:RollbackActions = @()
+
+function Add-RollbackAction {
+    param([scriptblock]$Action, [string]$Description)
+    $Script:RollbackActions += @{ Action = $Action; Description = $Description }
+}
+
+function Invoke-Rollback {
+    if ($Script:RollbackActions.Count -eq 0) { return }
+    Write-Step "Rolling back changes..." -Color Yellow
+    Write-Log "Starting rollback ($($Script:RollbackActions.Count) actions)"
+    for ($i = $Script:RollbackActions.Count - 1; $i -ge 0; $i--) {
+        $rb = $Script:RollbackActions[$i]
+        try {
+            Write-Log "Rollback: $($rb.Description)"
+            & $rb.Action
+        } catch {
+            Write-Log "Rollback action failed: $($rb.Description) - $_" "WARN"
+        }
+    }
+    Write-Step "Rollback complete." -Color Yellow
+}
+
 # ============================================================
 # Main
 # ============================================================
@@ -230,16 +292,58 @@ try {
     & $Binary @InstallArgs
     if ($LASTEXITCODE -ne 0) {
         Write-Err "Installation failed (exit code: $LASTEXITCODE)."
+        Invoke-Rollback
         exit 1
     }
+    Add-RollbackAction -Description "Remove install directory" -Action {
+        if (Test-Path $InstallDir) { Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
 
+    # --- Add to PATH ---
+    Write-Step "Configuring system PATH..." -Color Cyan
+    try {
+        Add-ToSystemPath -Directory $InstallDir
+        Add-RollbackAction -Description "Remove from PATH" -Action {
+            $p = [System.Environment]::GetEnvironmentVariable("Path", [System.EnvironmentVariableTarget]::Machine)
+            $p = ($p -split ";" | Where-Object { $_ -ne $InstallDir }) -join ";"
+            [System.Environment]::SetEnvironmentVariable("Path", $p, [System.EnvironmentVariableTarget]::Machine)
+        }
+    } catch {
+        Write-Step "  (PATH setup skipped: $_)" -Color Yellow
+        Write-Log "PATH setup failed: $_" "WARN"
+    }
+
+    # --- Deploy uninstall.ps1 ---
+    $UninstallSource = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Definition) "uninstall.ps1"
+    $UninstallDest = Join-Path $InstallDir "uninstall.ps1"
+    if (Test-Path $UninstallSource) {
+        Copy-Item -Path $UninstallSource -Destination $UninstallDest -Force
+        Write-Step "  Uninstaller deployed to $UninstallDest" -Color Green
+        Write-Log "Uninstaller copied to $UninstallDest"
+    }
+
+    # --- Register in Add/Remove Programs ---
+    Write-Step "Registering in Windows..." -Color Cyan
+    try {
+        Register-Uninstaller -InstallDir $InstallDir -Version $VersionNum
+        Add-RollbackAction -Description "Remove registry entry" -Action {
+            Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Exiv" -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Write-Step "  (Registry setup skipped: $_)" -Color Yellow
+        Write-Log "Registry setup failed: $_" "WARN"
+    }
+
+    # --- Success ---
     Write-Host ""
     Write-Step "Exiv v$VersionNum installed successfully!" -Color Green
     Write-Host ""
     Write-Host "  Binary:    $InstallDir\exiv_system.exe" -ForegroundColor Cyan
     Write-Host "  Dashboard: http://localhost:8081" -ForegroundColor Cyan
     Write-Host "  Manage:    exiv_system.exe service start|stop|status" -ForegroundColor Cyan
-    Write-Host "  Uninstall: exiv_system.exe uninstall" -ForegroundColor Cyan
+    Write-Host "  Uninstall: powershell -File `"$InstallDir\uninstall.ps1`"" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  NOTE: Restart your terminal to use 'exiv_system' from PATH." -ForegroundColor Yellow
     Write-Host ""
     Write-Log "Installation completed successfully: v$VersionNum -> $InstallDir"
 
