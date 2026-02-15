@@ -16,6 +16,7 @@ pub fn exe_dir() -> PathBuf {
 pub struct AppConfig {
     pub database_url: String,
     pub port: u16,
+    pub bind_address: String,
     pub cors_origins: Vec<HeaderValue>,
     pub default_agent_id: String,
     pub allowed_hosts: Vec<String>,
@@ -74,6 +75,10 @@ impl AppConfig {
             anyhow::bail!("PORT must be between 1 and 65535");
         }
 
+        // BIND_ADDRESS: defaults to 0.0.0.0 for standalone mode.
+        // Tauri desktop mode sets this to 127.0.0.1 to restrict to loopback only.
+        let bind_address = env::var("BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0".to_string());
+
         let cors_origins_str = env::var("CORS_ORIGINS")
             .unwrap_or_else(|_| "http://localhost:5173,http://127.0.0.1:5173".to_string());
 
@@ -128,6 +133,7 @@ impl AppConfig {
         Ok(Self {
             database_url,
             port,
+            bind_address,
             cors_origins,
             default_agent_id,
             allowed_hosts,

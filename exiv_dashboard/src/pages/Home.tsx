@@ -12,7 +12,7 @@ import { useDraggable } from '../hooks/useDraggable';
 import { useEventStream } from '../hooks/useEventStream';
 import { GazeTracker } from '../components/GazeTracker';
 
-import { api } from '../services/api';
+import { api, API_BASE } from '../services/api';
 import { SystemUpdate } from '../components/SystemUpdate';
 
 const StatusCore = lazy(() => import('../components/StatusCore').then(m => ({ default: m.StatusCore })));
@@ -24,7 +24,7 @@ function SystemView() {
   const [logs, setLogs] = useState<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  useEventStream('/api/events', (event) => {
+  useEventStream(`${API_BASE}/events`, (event) => {
     const timestamp = new Date().toLocaleTimeString();
     const logLine = `[${timestamp}] ${event.type}: ${JSON.stringify(event.data).slice(0, 100)}...`;
     setLogs(prev => [...prev, logLine].slice(-50));

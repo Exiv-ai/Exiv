@@ -322,10 +322,10 @@ pub async fn run_kernel() -> anyhow::Result<()> {
                 .allow_headers([axum::http::header::CONTENT_TYPE]),
         );
 
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.port)).await?;
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", config.bind_address, config.port)).await?;
     info!(
-        "🚀 Exiv System Kernel is listening on http://0.0.0.0:{}",
-        config.port
+        "🚀 Exiv System Kernel is listening on http://{}:{}",
+        config.bind_address, config.port
     );
 
     let shutdown_signal = app_state.shutdown.clone();

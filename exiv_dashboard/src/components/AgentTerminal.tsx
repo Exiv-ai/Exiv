@@ -4,7 +4,7 @@ import { AgentMetadata, PluginManifest, ExivMessage } from '../types';
 import { AgentPluginWorkspace } from './AgentPluginWorkspace';
 import { useEventStream } from '../hooks/useEventStream';
 
-import { api } from '../services/api';
+import { api, API_BASE } from '../services/api';
 
 export interface AgentTerminalProps {
   agents?: AgentMetadata[];
@@ -26,7 +26,7 @@ function AgentConsole({ agent, onBack }: { agent: AgentMetadata, onBack: () => v
   }, [messages]);
 
   // Subscribe to system-wide events
-  useEventStream('/api/events', (event) => {
+  useEventStream(`${API_BASE}/events`, (event) => {
     if (event.type === 'ThoughtResponse' && event.data.agent_id === agent.id) {
       setIsTyping(false);
       const newMsg: ExivMessage = {

@@ -1,6 +1,13 @@
 import { AgentMetadata, PluginManifest } from '../types';
 
-const API_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/api`;
+// Tauri WebView environment detection
+const isTauri = '__TAURI_INTERNALS__' in window;
+
+// In Tauri mode, window.location.origin returns "tauri://localhost" which cannot reach
+// the HTTP kernel. We must use the actual loopback address with the kernel port.
+const KERNEL_PORT = 8081;
+const API_URL = import.meta.env.VITE_API_URL
+  || (isTauri ? `http://127.0.0.1:${KERNEL_PORT}/api` : `${window.location.origin}/api`);
 export const API_BASE = API_URL.endsWith('/api') ? API_URL : `${API_URL}/api`;
 
 export const api = {
