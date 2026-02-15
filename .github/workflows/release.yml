@@ -149,7 +149,8 @@ jobs:
         run: |
           CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           if [[ "${{ steps.version.outputs.version }}" != "$CARGO_VERSION" ]]; then
-            echo "::warning::Tag version (${{ steps.version.outputs.version }}) != Cargo.toml version ($CARGO_VERSION)"
+            echo "::error::Tag version (${{ steps.version.outputs.version }}) != Cargo.toml version ($CARGO_VERSION)"
+            exit 1
           fi
 
       - name: Package (tar.gz)
@@ -316,6 +317,24 @@ jobs:
           done
           echo "Release files:"
           ls -lh release-files/
+
+      - name: Generate checksums manifest
+        run: |
+          cd release-files
+          sha256sum * > SHA256SUMS.txt 2>/dev/null || shasum -a 256 * > SHA256SUMS.txt
+          echo "SHA256SUMS.txt:"
+          cat SHA256SUMS.txt
+          cd ..
+
+      - name: Sign checksums manifest (cosign keyless)
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3
+      - run: |
+          cosign sign-blob --yes \
+            --output-signature release-files/SHA256SUMS.txt.sig \
+            --output-certificate release-files/SHA256SUMS.txt.pem \
+            release-files/SHA256SUMS.txt
+        env:
+          COSIGN_EXPERIMENTAL: "1"
 
       - name: Create tag (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'

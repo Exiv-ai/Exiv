@@ -157,6 +157,12 @@ pub async fn run_kernel() -> anyhow::Result<()> {
         if let Some(parent) = db_path.parent() {
             if !parent.as_os_str().is_empty() && parent != std::path::Path::new(".") {
                 std::fs::create_dir_all(parent)?;
+                // Restrict data directory permissions (contains SQLite DB)
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+                }
                 info!("📁 Data directory: {}", parent.display());
             }
         }

@@ -363,11 +363,14 @@ pub async fn apply_handler(
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
+        // Atomic write to prevent symlink attacks
         let maint = crate::config::exe_dir().join(".maintenance");
-        if let Err(e) = std::fs::write(&maint, "updating") {
-            error!("❌ Failed to create .maintenance file: {}", e);
-        } else {
-            info!("🚧 Maintenance mode engaged for update.");
+        let maint_tmp = crate::config::exe_dir().join(".maintenance.tmp");
+        match std::fs::write(&maint_tmp, "updating")
+            .and_then(|_| std::fs::rename(&maint_tmp, &maint))
+        {
+            Ok(_) => info!("🚧 Maintenance mode engaged for update."),
+            Err(e) => error!("❌ Failed to create .maintenance file: {}", e),
         }
 
         info!("🔄 Restarting with new version...");

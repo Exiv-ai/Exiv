@@ -75,9 +75,9 @@ impl AppConfig {
             anyhow::bail!("PORT must be between 1 and 65535");
         }
 
-        // BIND_ADDRESS: defaults to 0.0.0.0 for standalone mode.
-        // Tauri desktop mode sets this to 127.0.0.1 to restrict to loopback only.
-        let bind_address = env::var("BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0".to_string());
+        // BIND_ADDRESS: defaults to 127.0.0.1 (loopback only) for safety.
+        // Set to 0.0.0.0 explicitly in .env if network access from other hosts is required.
+        let bind_address = env::var("BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1".to_string());
 
         let cors_origins_str = env::var("CORS_ORIGINS")
             .unwrap_or_else(|_| "http://localhost:5173,http://127.0.0.1:5173".to_string());
@@ -87,6 +87,11 @@ impl AppConfig {
             .split(',')
             .filter_map(|s| {
                 let trimmed = s.trim();
+                // Reject non-HTTP(S) schemes (prevent file://, javascript://, data://)
+                if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+                    tracing::warn!("Skipping CORS origin with invalid scheme '{}': must be http:// or https://", trimmed);
+                    return None;
+                }
                 match trimmed.parse::<HeaderValue>() {
                     Ok(v) => Some(v),
                     Err(e) => {

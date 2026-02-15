@@ -40,8 +40,9 @@ fn check_auth(state: &AppState, headers: &HeaderMap) -> AppResult<()> {
                     exiv_shared::Permission::AdminAccess
                 )));
             }
-            // M-09: Warn in debug builds when no API key is set
-            tracing::warn!("Admin API access without authentication (debug mode, no API key configured)");
+            // M-09: Warn loudly in debug builds when no API key is set
+            tracing::warn!("⚠️  SECURITY: Admin API access without authentication (debug mode, no EXIV_API_KEY)");
+            tracing::warn!("⚠️  Set EXIV_API_KEY in .env before deploying to production");
         }
     }
     Ok(())
@@ -282,12 +283,14 @@ pub async fn shutdown_handler(
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        // 🚧 Signal maintenance mode (exe directory for deployed layout)
+        // 🚧 Signal maintenance mode (atomic write to prevent symlink attacks)
         let maint = crate::config::exe_dir().join(".maintenance");
-        if let Err(e) = std::fs::write(&maint, "active") {
-            error!("❌ Failed to create .maintenance file: {}", e);
-        } else {
-            info!("🚧 Maintenance mode engaged.");
+        let maint_tmp = crate::config::exe_dir().join(".maintenance.tmp");
+        match std::fs::write(&maint_tmp, "active")
+            .and_then(|_| std::fs::rename(&maint_tmp, &maint))
+        {
+            Ok(_) => info!("🚧 Maintenance mode engaged."),
+            Err(e) => error!("❌ Failed to create .maintenance file: {}", e),
         }
 
         info!("👋 Kernel shutting down gracefully.");
@@ -408,7 +411,10 @@ pub async fn get_memories(State(state): State<Arc<AppState>>) -> AppResult<Json<
     .await?;
 
     let memories: Vec<serde_json::Value> = rows.into_iter()
-        .filter_map(|(_k, v)| serde_json::from_str(&v).ok())
+        .filter_map(|(_k, v)| serde_json::from_str(&v).map_err(|e| {
+            tracing::debug!("Skipping malformed memory entry: {}", e);
+            e
+        }).ok())
         .collect();
 
     Ok(Json(serde_json::json!(memories)))

@@ -77,7 +77,10 @@ impl PythonBridgePlugin {
         let base_canonical = base_dir.canonicalize()
             .map_err(|e| anyhow::anyhow!("Failed to resolve scripts directory: {}", e))?;
         let candidate_canonical = candidate_path.canonicalize()
-            .map_err(|_| anyhow::anyhow!("Invalid or non-existent script path: {}", script_path))?;
+            .map_err(|e| {
+                tracing::warn!("Script path canonicalization failed for '{}': {}", script_path, e);
+                anyhow::anyhow!("Invalid or non-existent script path: {}", script_path)
+            })?;
 
         // Ensure the resolved path is still within the base directory
         if !candidate_canonical.starts_with(&base_canonical) {
@@ -267,10 +270,18 @@ impl PythonBridgePlugin {
             // C-04: id, version, category, service_type, capabilities, required_permissions
             // are NOT overridable from Python scripts (security-critical fields).
             if let Some(name) = manifest_json.get("name").and_then(|v| v.as_str()) {
-                manifest.name = name.to_string();
+                if name.len() <= 200 {
+                    manifest.name = name.to_string();
+                } else {
+                    tracing::warn!("Python manifest name exceeds 200 chars, ignoring");
+                }
             }
             if let Some(desc) = manifest_json.get("description").and_then(|v| v.as_str()) {
-                manifest.description = desc.to_string();
+                if desc.len() <= 1000 {
+                    manifest.description = desc.to_string();
+                } else {
+                    tracing::warn!("Python manifest description exceeds 1000 chars, ignoring");
+                }
             }
 
             // 🧰 ツールとアクション情報の継承

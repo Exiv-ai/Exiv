@@ -134,6 +134,13 @@ pub async fn install(
         let env_content = env_template(&prefix, &api_key);
         std::fs::write(&env_path, env_content)
             .context("Failed to write .env")?;
+        // Restrict .env permissions (contains EXIV_API_KEY)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600))
+                .context("Failed to set .env permissions to 0600")?;
+        }
         info!("🔑 Generated .env with EXIV_API_KEY");
         println!("  EXIV_API_KEY has been auto-generated. Save it securely:");
         println!("  {}", api_key);
