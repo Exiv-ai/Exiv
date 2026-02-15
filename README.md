@@ -90,12 +90,12 @@ exiv_system update --version 0.2.0  # install a specific version
 ## Project Structure
 
 ```
-exiv_core/          Kernel — event bus, plugin manager, HTTP API, rate limiter
-exiv_shared/        SDK — traits (Plugin, ReasoningEngine, Tool, etc.) and shared types
-exiv_macros/        Procedural macro for plugin manifest generation
-exiv_plugins/       Official plugins (8 crates)
-exiv_dashboard/     React/TypeScript web UI (Tauri-compatible)
-scripts/            Python bridge runtime, installer
+crates/core/        Kernel — event bus, plugin manager, HTTP API, rate limiter
+crates/shared/      SDK — traits (Plugin, ReasoningEngine, Tool, etc.) and shared types
+crates/macros/      Procedural macro for plugin manifest generation
+plugins/            Official plugins (8 crates)
+dashboard/          React/TypeScript web UI (Tauri desktop app)
+scripts/            Python bridge runtime
 docs/               Architecture docs, changelog, development guide
 ```
 

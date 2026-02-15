@@ -1,17 +1,17 @@
 [workspace]
 members = [
-    "exiv_core",
-    "exiv_shared",
-    "exiv_plugins/plugin_ks22",
-    "exiv_plugins/plugin_deepseek",
-    "exiv_plugins/plugin_cerebras",
-    "exiv_plugins/plugin_moderator",
-    "exiv_plugins/plugin_mcp",
-    "exiv_plugins/plugin_vision",
-    "exiv_plugins/plugin_cursor",
-    "exiv_macros",
-    "exiv_plugins/plugin_python_bridge",
-    "exiv_dashboard/src-tauri",
+    "crates/core",
+    "crates/shared",
+    "crates/macros",
+    "plugins/ks22",
+    "plugins/deepseek",
+    "plugins/cerebras",
+    "plugins/moderator",
+    "plugins/mcp",
+    "plugins/vision",
+    "plugins/cursor",
+    "plugins/python_bridge",
+    "dashboard/src-tauri",
 ]
 resolver = "2"
 

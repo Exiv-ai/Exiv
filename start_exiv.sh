@@ -12,7 +12,7 @@ fi
 
 # Configuration (with defaults; override via .env or environment)
 export PORT="${PORT:-8081}"
-export EXIV_DASHBOARD_PATH="${EXIV_DASHBOARD_PATH:-$(pwd)/exiv_dashboard/dist}"
+export EXIV_DASHBOARD_PATH="${EXIV_DASHBOARD_PATH:-$(pwd)/dashboard/dist}"
 export DATABASE_URL="${DATABASE_URL:-sqlite:$(pwd)/exiv_memories.db}"
 export RUST_LOG="${RUST_LOG:-info}"
 

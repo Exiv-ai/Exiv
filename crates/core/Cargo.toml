@@ -8,15 +8,15 @@ name = "exiv_system"
 path = "src/main.rs"
 
 [dependencies]
-exiv_shared = { path = "../exiv_shared" }
-plugin_ks22 = { path = "../exiv_plugins/plugin_ks22" }
-plugin_deepseek = { path = "../exiv_plugins/plugin_deepseek" }
-plugin_cerebras = { path = "../exiv_plugins/plugin_cerebras" }
-plugin_moderator = { path = "../exiv_plugins/plugin_moderator" }
-plugin_mcp = { path = "../exiv_plugins/plugin_mcp" }
-plugin_vision = { path = "../exiv_plugins/plugin_vision" }
-plugin_cursor = { path = "../exiv_plugins/plugin_cursor" }
-plugin_python_bridge = { path = "../exiv_plugins/plugin_python_bridge" }
+exiv_shared = { path = "../shared" }
+plugin_ks22 = { path = "../../plugins/ks22" }
+plugin_deepseek = { path = "../../plugins/deepseek" }
+plugin_cerebras = { path = "../../plugins/cerebras" }
+plugin_moderator = { path = "../../plugins/moderator" }
+plugin_mcp = { path = "../../plugins/mcp" }
+plugin_vision = { path = "../../plugins/vision" }
+plugin_cursor = { path = "../../plugins/cursor" }
+plugin_python_bridge = { path = "../../plugins/python_bridge" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

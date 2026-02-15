@@ -144,13 +144,13 @@ Exiv uses a phase-based versioning scheme with three stages.
 |-----------|-----------|----------------|
 | System (kernel, SDK, macros) | Unified workspace version | `Cargo.toml` → `workspace.package.version` |
 | Plugins | Independent per plugin | `#[exiv_plugin(version = "...")]` in each plugin's `lib.rs` |
-| Dashboard | Matches system version | `exiv_dashboard/package.json` |
+| Dashboard | Matches system version | `dashboard/package.json` |
 
 Plugins maintain their own version numbers because they can evolve independently of the kernel. When creating a new plugin, start at `0.1.0`.
 
 ### Release Process
 
-1. Bump the version in `Cargo.toml` (workspace) and `exiv_dashboard/package.json`
+1. Bump the version in `Cargo.toml` (workspace) and `dashboard/package.json`
 2. Commit: `chore: bump version to β1.1 (0.1.1)` or `chore: bump version to β2 (0.2.0)`
 3. Tag: `git tag v0.1.1` or `git tag v0.2.0`
 4. Push: `git push origin master --tags`

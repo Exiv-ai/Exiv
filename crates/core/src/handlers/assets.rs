@@ -6,7 +6,7 @@ use axum::{
 };
 
 #[derive(RustEmbed)]
-#[folder = "../exiv_dashboard/dist/"]
+#[folder = "../../dashboard/dist/"]
 struct Asset;
 
 pub async fn static_handler(uri: Uri) -> impl IntoResponse {

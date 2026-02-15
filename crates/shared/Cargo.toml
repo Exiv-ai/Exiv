@@ -1,14 +1,18 @@
 [package]
-name = "plugin_moderator"
+name = "exiv_shared"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-exiv_shared = { path = "../../exiv_shared" }
-tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+thiserror = "2.0"
 async-trait.workspace = true
-chrono = { version = "0.4", features = ["serde"] }
+tokio.workspace = true
+axum.workspace = true
+exiv_macros = { path = "../macros" }
+inventory = "0.3.21"

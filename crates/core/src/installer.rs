@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 // Embedded Python bridge scripts (extracted during install)
-const BRIDGE_RUNTIME_PY: &str = include_str!("../../scripts/bridge_runtime.py");
-const BRIDGE_MAIN_PY: &str = include_str!("../../scripts/bridge_main.py");
-const REQUIREMENTS_TXT: &str = include_str!("../../scripts/requirements.txt");
+const BRIDGE_RUNTIME_PY: &str = include_str!("../../../scripts/bridge_runtime.py");
+const BRIDGE_MAIN_PY: &str = include_str!("../../../scripts/bridge_main.py");
+const REQUIREMENTS_TXT: &str = include_str!("../../../scripts/requirements.txt");
 
 /// Binary name for the current platform
 fn binary_name() -> &'static str {

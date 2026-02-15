@@ -23,9 +23,8 @@ target/
 compiled-tailwind.css
 
 # Build artifacts
-exiv_bin_release/
+vers_bin_release/
 exiv_guardian
-ai_karin
 
 # Python
 __pycache__/
@@ -36,4 +35,4 @@ __pycache__/
 test_*.html
 
 # Dashboard build output
-exiv_dashboard/public/
+dashboard/public/

@@ -34,5 +34,5 @@ image = "0.25"
 base64 = "0.21"
 
 # Exiv Kernel (provides axum, tower-http, tokio, tracing, etc.)
-exiv_core = { path = "../../exiv_core" }
+exiv_core = { path = "../../crates/core" }
 dotenvy = "0.15"

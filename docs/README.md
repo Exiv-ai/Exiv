@@ -39,8 +39,8 @@ Documentation for Exiv design, development, and quality management.
 
 | Plugin | Location | Description |
 |--------|----------|-------------|
-| exiv_macros | `exiv_macros/README.md` | Macro optimization guide, icon embedding, CI/CD integration |
-| All plugins | `exiv_plugins/*/README.md` | Individual plugin documentation (WIP) |
+| exiv_macros | `crates/macros/README.md` | Macro optimization guide, icon embedding, CI/CD integration |
+| All plugins | `plugins/*/README.md` | Individual plugin documentation (WIP) |
 
 ## Getting Started
 
