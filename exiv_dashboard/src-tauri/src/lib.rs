@@ -1,3 +1,7 @@
+use tauri::Manager;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::TrayIconBuilder;
+
 /// Returns the kernel HTTP port (used by frontend to construct API URLs).
 #[tauri::command]
 fn get_kernel_port() -> u16 {
@@ -22,8 +26,9 @@ pub fn run() {
     };
     std::env::set_var("CORS_ORIGINS", combined);
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_window_state::Builder::new().build())
         .invoke_handler(tauri::generate_handler![get_kernel_port])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -34,7 +39,47 @@ pub fn run() {
                 )?;
             }
 
-            // Launch the Exiv Kernel Server in a background async task
+            // --- System Tray ---
+            let status_item = MenuItem::with_id(
+                app, "status", "Exiv: Online", false, None::<&str>,
+            )?;
+            let show_item = MenuItem::with_id(
+                app, "show", "Show Dashboard", true, None::<&str>,
+            )?;
+            let quit_item = MenuItem::with_id(
+                app, "quit", "Quit Exiv", true, None::<&str>,
+            )?;
+
+            let tray_menu = Menu::with_items(app, &[
+                &status_item,
+                &PredefinedMenuItem::separator(app)?,
+                &show_item,
+                &PredefinedMenuItem::separator(app)?,
+                &quit_item,
+            ])?;
+
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("Exiv System")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(true)
+                .on_menu_event(|app, event| {
+                    match event.id.as_ref() {
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .build(app)?;
+
+            // --- Launch the Exiv Kernel Server ---
             tauri::async_runtime::spawn(async move {
                 dotenvy::dotenv().ok();
                 if let Err(e) = exiv_core::run_kernel().await {
@@ -44,6 +89,22 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        // Intercept window close: minimize to tray instead of quitting
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // Run with cleanup on exit
+    app.run(|_app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            // Clean up stale maintenance file if present
+            let maint = exiv_core::config::exe_dir().join(".maintenance");
+            let _ = std::fs::remove_file(maint);
+        }
+    });
 }
