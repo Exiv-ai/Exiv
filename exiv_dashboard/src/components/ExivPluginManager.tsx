@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Puzzle, Shield, CheckCircle2, AlertTriangle, Save, Filter, Brain, Database, Zap, Globe, Settings, MousePointer2, ExternalLink, Terminal, ChevronDown, ChevronRight, Hash, Box } from 'lucide-react';
+import { Puzzle, Shield, CheckCircle2, AlertTriangle, Save, Filter, Brain, Database, Zap, Globe, Settings, MousePointer2, ExternalLink, Terminal, ChevronDown, ChevronRight, Hash, Box, FolderOpen } from 'lucide-react';
 import { PluginManifest, PluginCategory } from '../types';
 
 import { api } from '../services/api';
+import { isTauri, openFileDialog } from '../lib/tauri';
 
 function ConfigModal({ plugin, onClose }: { plugin: PluginManifest, onClose: () => void }) {
   const [config, setConfig] = useState<Record<string, string>>({});
@@ -35,19 +36,47 @@ function ConfigModal({ plugin, onClose }: { plugin: PluginManifest, onClose: () 
           <div className="p-8 text-center text-slate-400 font-mono text-xs">Loading config...</div>
         ) : (
           <div className="space-y-4">
-            {plugin.required_config_keys.length > 0 ? plugin.required_config_keys.map(key => (
-              <div key={key}>
-                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">{key}</label>
-                <input 
-                  type={key.includes('key') || key.includes('password') ? 'password' : 'text'}
-                  value={config[key] || ''}
-                  onChange={e => setConfig(prev => ({ ...prev, [key]: e.target.value }))}
-                  onBlur={e => save(key, e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm font-mono focus:outline-none focus:border-[#2e4de6] focus:ring-1 focus:ring-[#2e4de6]"
-                  placeholder={`Enter ${key}...`}
-                />
-              </div>
-            )) : (
+            {plugin.required_config_keys.length > 0 ? plugin.required_config_keys.map(key => {
+              const isPathKey = /path|script|file|dir/i.test(key);
+              const isSecretKey = key.includes('key') || key.includes('password');
+              return (
+                <div key={key}>
+                  <label className="block text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">{key}</label>
+                  <div className="flex gap-2">
+                    <input
+                      type={isSecretKey ? 'password' : 'text'}
+                      value={config[key] || ''}
+                      onChange={e => setConfig(prev => ({ ...prev, [key]: e.target.value }))}
+                      onBlur={e => save(key, e.target.value)}
+                      className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm font-mono focus:outline-none focus:border-[#2e4de6] focus:ring-1 focus:ring-[#2e4de6]"
+                      placeholder={`Enter ${key}...`}
+                    />
+                    {isPathKey && isTauri && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const filters = key.includes('script') || key.includes('python')
+                            ? [{ name: 'Python Scripts', extensions: ['py'] }]
+                            : undefined;
+                          const selected = await openFileDialog({
+                            title: `Select ${key}`,
+                            filters,
+                          });
+                          if (selected) {
+                            setConfig(prev => ({ ...prev, [key]: selected }));
+                            save(key, selected);
+                          }
+                        }}
+                        className="px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-[#2e4de6]/10 hover:border-[#2e4de6]/50 text-slate-500 hover:text-[#2e4de6] transition-colors"
+                        title="Browse files"
+                      >
+                        <FolderOpen size={16} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            }) : (
               <div className="p-4 bg-slate-50 text-slate-400 text-xs rounded-lg text-center font-mono border border-slate-100 border-dashed">
                 No configuration required for this plugin.
               </div>
@@ -219,7 +248,7 @@ export function ExivPluginManager() {
         <div>
           <h2 className="text-xl font-black tracking-tight text-slate-800 uppercase">System Plugins</h2>
           <p className="text-[10px] text-slate-400 font-mono tracking-widest uppercase mt-1">
-            EXIV-SYSTEM Kernel v0.3.3 / Configuration Panel
+            EXIV-SYSTEM Kernel v{__APP_VERSION__} / Configuration Panel
           </p>
         </div>
         <div className="flex items-center gap-3">

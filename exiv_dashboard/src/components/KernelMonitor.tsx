@@ -48,7 +48,7 @@ export const KernelMonitor: React.FC<KernelMonitorProps> = ({ onClose }) => {
           <p className="text-[10px] text-slate-400 font-mono tracking-[0.3em] uppercase mt-2">Exiv System Core Status</p>
         </div>
         <div className="px-3 py-1 bg-[#2e4de6]/10 text-[#2e4de6] rounded-full text-[9px] font-bold font-mono">
-          v0.3.3-CORE
+          v{__APP_VERSION__}
         </div>
       </div>
 

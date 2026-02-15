@@ -56,7 +56,7 @@ export const ExivLayout: React.FC = () => {
           /* Kernel / System View */
           <div className="flex-1 p-8 flex flex-col gap-6 animate-in fade-in slide-in-from-left-4 duration-500">
             <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-cyan-300">
-              Exiv Kernel v2.0.0
+              Exiv Kernel v{__APP_VERSION__}
             </h1>
             <div className="grid grid-cols-3 gap-6">
               <div className="bg-white/5 border border-white/10 p-6 rounded-3xl backdrop-blur-md">

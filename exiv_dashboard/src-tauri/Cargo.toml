@@ -25,6 +25,13 @@ tauri-plugin-notification = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-window-state = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-global-shortcut = "2"
+
+# Screen capture
+xcap = "0.0.13"
+image = "0.25"
+base64 = "0.21"
 
 # Exiv Kernel (provides axum, tower-http, tokio, tracing, etc.)
 exiv_core = { path = "../../exiv_core" }

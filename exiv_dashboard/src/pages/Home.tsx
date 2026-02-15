@@ -251,7 +251,7 @@ export function Home() {
       <div className="relative z-20 w-full max-w-5xl flex flex-col items-center">
         <div className="mb-16 text-center">
           <h1 className="text-4xl font-black tracking-[0.2em] text-slate-800">
-            EXIV SYSTEM <span className="text-xl font-black tracking-widest text-[#2e4de6] ml-1">v0.1.0</span>
+            EXIV SYSTEM <span className="text-xl font-black tracking-widest text-[#2e4de6] ml-1">v{__APP_VERSION__}</span>
           </h1>
           <p className="text-[10px] text-slate-400 mt-3 font-mono uppercase tracking-[0.4em]">
             Neural Interface / Central Archive

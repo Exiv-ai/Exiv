@@ -9,6 +9,8 @@
     "core:default",
     "shell:allow-open",
     "notification:default",
-    "updater:default"
+    "updater:default",
+    "dialog:default",
+    "global-shortcut:allow-register"
   ]
 }

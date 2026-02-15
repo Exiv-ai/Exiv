@@ -101,7 +101,7 @@ export function ExivHome() {
         {/* Logo / Header (1.6.12 Style) */}
         <div className="absolute top-12 text-center z-10">
           <h1 className="text-4xl font-black tracking-[0.2em] text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]">
-            Exiv <span className="text-xl font-black tracking-widest text-[#2e4de6] ml-1">v0.3.0</span>
+            Exiv <span className="text-xl font-black tracking-widest text-[#2e4de6] ml-1">v{__APP_VERSION__}</span>
           </h1>
           <p className="text-[10px] text-white/40 mt-3 font-mono uppercase tracking-[0.4em]">
             Exiv / Unified Interface

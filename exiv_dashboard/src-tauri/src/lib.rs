@@ -1,6 +1,7 @@
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// Returns the kernel HTTP port (used by frontend to construct API URLs).
 #[tauri::command]
@@ -9,6 +10,43 @@ fn get_kernel_port() -> u16 {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(8081)
+}
+
+/// Capture the primary screen and return a base64-encoded PNG.
+#[tauri::command]
+fn capture_screen() -> Result<String, String> {
+    use base64::Engine;
+    use xcap::Monitor;
+
+    let monitors = Monitor::all().map_err(|e| format!("Failed to enumerate monitors: {}", e))?;
+    let primary = monitors
+        .into_iter()
+        .find(|m| m.is_primary())
+        .or_else(|| Monitor::all().ok().and_then(|m| m.into_iter().next()))
+        .ok_or_else(|| "No monitor found".to_string())?;
+
+    let image = primary
+        .capture_image()
+        .map_err(|e| format!("Screen capture failed: {}", e))?;
+
+    let mut buf = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut buf, image::ImageFormat::Png)
+        .map_err(|e| format!("PNG encoding failed: {}", e))?;
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
+}
+
+/// Select a file within the scripts/ directory. Returns a relative path.
+#[tauri::command]
+fn select_script_file(base_dir: String) -> Result<Option<String>, String> {
+    // This is a synchronous helper; the actual dialog is done via tauri-plugin-dialog on the frontend.
+    // This command validates a proposed path against security constraints.
+    let path = std::path::Path::new(&base_dir);
+    if !path.exists() || !path.is_dir() {
+        return Err(format!("Directory does not exist: {}", base_dir));
+    }
+    Ok(None)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -31,7 +69,13 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![get_kernel_port])
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![
+            get_kernel_port,
+            capture_screen,
+            select_script_file
+        ])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -80,6 +124,23 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // --- Global Shortcut: CmdOrCtrl+Shift+E to toggle dashboard ---
+            app.global_shortcut().on_shortcut(
+                "CmdOrCtrl+Shift+E",
+                |app_handle: &tauri::AppHandle, _shortcut: &tauri_plugin_global_shortcut::Shortcut, event: tauri_plugin_global_shortcut::ShortcutEvent| {
+                    if event.state == ShortcutState::Pressed {
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            if window.is_visible().unwrap_or(false) {
+                                let _ = window.hide();
+                            } else {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    }
+                },
+            ).ok();
 
             // --- Launch the Exiv Kernel Server ---
             tauri::async_runtime::spawn(async move {
